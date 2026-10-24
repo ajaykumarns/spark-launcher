@@ -1,6 +1,7 @@
 """Authoritative workload configuration and pure resource planning."""
 from __future__ import annotations
 import copy
+import difflib
 import itertools
 import json
 from pathlib import Path
@@ -81,19 +82,27 @@ def validate_cluster(config):
 
 
 def resolve_workload(config, requested):
-    requested = requested.removeprefix("garuda/").removeprefix("parakeet/")
-    found = [(name, m) for name, m in config["models"].items()
-             if requested in (name, *m.get("aliases", []))]
-    if len(found) != 1:
-        raise SparkError(f"Unknown or ambiguous workload: {requested}.")
-    return found[0]
+    requested = requested.strip().removeprefix('garuda/').removeprefix('parakeet/').casefold()
+    aliases = {}
+    for name, model in config['models'].items():
+        for alias in (name, *model.get('aliases', [])):
+            aliases.setdefault(alias.casefold(), set()).add(name)
+    matches = aliases.get(requested, set())
+    if len(matches) == 1:
+        name = next(iter(matches))
+        return name, config['models'][name]
+    if matches:
+        raise SparkError('Ambiguous model alias: ' + requested + '. Use one of: ' + ', '.join(sorted(matches)) + '.')
+    closest = difflib.get_close_matches(requested, aliases, n=1, cutoff=.6)
+    hint = f' Did you mean {closest[0]}?' if closest else ''
+    raise SparkError('Unknown model or service: ' + requested + '.' + hint + ' Run sparky models --installed for names.')
 
 
 def selected(config, name, on=None):
     model = config["models"][name]
     placement = on or model["run_on"]
     if placement not in model["settings"]:
-        raise SparkError(f"{name} has no recipe for {placement}.")
+        raise SparkError(f"{name} has no recipe for {placement}. Available placements: " + ", ".join(model["settings"]) + ".")
     settings = model["settings"][placement]
     if settings.get("enabled", True) is False:
         raise SparkError(settings.get("reason", f"{name}/{placement} is not installed."))

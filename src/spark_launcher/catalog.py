@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import difflib
 import os
 import tempfile
 from datetime import datetime, timezone
@@ -47,9 +48,11 @@ def write_json(path, value):
 
 
 def validate_config(config):
-    if config.get("version") != 1:
+    if not isinstance(config, dict) or config.get("version") != 1:
         raise SparkError("Unsupported configuration version.")
-    u = urlsplit(config.get("gateway", ""))
+    if not isinstance(config.get("gateway"), str):
+        raise SparkError("Set gateway to an HTTPS URL in the client configuration.")
+    u = urlsplit(config["gateway"])
     if (not u.hostname or u.username or u.password or u.query or u.fragment
             or u.path not in ("", "/")):
         raise SparkError("Gateway must be an origin, without credentials, /v1, or a query.")
@@ -59,13 +62,24 @@ def validate_config(config):
     config.setdefault("model_prefix", "garuda/")
     config.setdefault("timeout_seconds", 7200)
     config.setdefault("compact_percent", 95)
+    if not isinstance(config["model_prefix"], str) or not config["model_prefix"]:
+        raise SparkError("model_prefix must be a nonempty string.")
+    config.setdefault("default_model", config["model_prefix"] + "spark-auto")
+    if not isinstance(config["default_model"], str):
+        raise SparkError("default_model must be a model name or alias.")
     config.setdefault("models", {})
     config.setdefault("binaries", {})
-    if not 50 <= config["compact_percent"] <= 95:
+    if type(config["compact_percent"]) is not int or not 50 <= config["compact_percent"] <= 95:
         raise SparkError("compact_percent must be 50..95.")
-    if not 1 <= config["timeout_seconds"] <= 86400:
+    if type(config["timeout_seconds"]) is not int or not 1 <= config["timeout_seconds"] <= 86400:
         raise SparkError("timeout_seconds must be 1..86400.")
+    if not isinstance(config["models"], dict) or not isinstance(config["binaries"], dict):
+        raise SparkError("Client models and binaries must be mappings. Check " + str(config_path()) + ".")
+    if any(not isinstance(value, str) for value in config["binaries"].values()):
+        raise SparkError("Each binaries entry must be an executable path.")
     for options in config["models"].values():
+        if not isinstance(options, dict):
+            raise SparkError("Client model entries must be mappings.")
         if any(key in options for key in ("context", "context_tokens", "context_length")):
             raise SparkError("Context limits come from the gateway, not the site file.")
     return config
@@ -74,8 +88,10 @@ def validate_config(config):
 def load_config():
     try:
         return validate_config(json.loads(config_path().read_text()))
+    except json.JSONDecodeError as error:
+        raise SparkError(f"Invalid JSON in {config_path()} at line {error.lineno}, column {error.colno}. Fix the client file.") from None
     except FileNotFoundError:
-        raise SparkError("Run sparky init --gateway https://your-spark:8443 first.") from None
+        raise SparkError("Client configuration is missing. Run sparky init --gateway https://your-spark:8443 first.") from None
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -84,7 +100,7 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def request_json(url, *, payload=None, method=None, headers=None, timeout=20, expect_json=True):
+def request_json(url, *, payload=None, method=None, headers=None, timeout=20, expect_json=True, safe_error_body=False):
     body = None if payload is None else json.dumps(payload).encode()
     request = Request(url, data=body, method=method, headers=headers or {})
     if body is not None:
@@ -96,8 +112,18 @@ def request_json(url, *, payload=None, method=None, headers=None, timeout=20, ex
                 raise SparkError("Response exceeds the metadata size limit.")
             return (json.loads(data) if data else {}) if expect_json else {}
     except HTTPError as error:
-        # Never include the response body: admin endpoints can return secrets.
-        raise SparkError(f"Server returned HTTP {error.code}.") from None
+        # Only the local controller emits errors safe for the CLI. Never copy
+        # response bodies from gateway admin endpoints or model backends.
+        if safe_error_body and urlsplit(url).hostname in ('127.0.0.1', 'localhost', '::1'):
+            try:
+                message = json.loads(error.read(4096)).get('error')
+            except (ValueError, AttributeError):
+                message = None
+            if isinstance(message, str) and len(message) <= 1024:
+                raise SparkError(message) from None
+        raise SparkError(f"Server returned HTTP {error.code}. Run sparky doctor to check gateway access.") from None
+    except json.JSONDecodeError:
+        raise SparkError("The server returned invalid JSON. Check the gateway URL with sparky doctor.") from None
     except (URLError, TimeoutError):
         raise SparkError("Cannot reach the server. Check Tailscale and the gateway.") from None
 
@@ -142,7 +168,10 @@ def make_catalog(config, wire):
 def fetch_catalog(config, offline=False):
     path = state_dir() / "catalog.json"
     if offline:
-        catalog = json.loads(path.read_text())
+        try:
+            catalog = json.loads(path.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            raise SparkError('No usable cached model list. Connect to the gateway and run sparky models first.') from None
         if catalog["gateway"] != config["gateway"]:
             raise SparkError("Cached catalog belongs to another gateway.")
         return catalog
@@ -152,39 +181,19 @@ def fetch_catalog(config, offline=False):
 
 
 def resolve(catalog, name):
-    matches = [m for m in catalog["models"] if name in
-               (m["id"], m["id"].split("/", 1)[-1], *m.get("aliases", []))]
-    if len(matches) != 1:
-        reason = "Ambiguous model alias" if matches else "Unknown model"
-        raise SparkError(f"{reason}: {name}. Run sparky models.")
-    return matches[0]
+    requested = name.strip().casefold()
+    aliases = {alias.casefold(): [] for m in catalog['models']
+               for alias in (m['id'], m['id'].split('/', 1)[-1], *m.get('aliases', []))}
+    for model in catalog['models']:
+        for alias in set((model['id'], model['id'].split('/', 1)[-1], *model.get('aliases', []))):
+            if model not in aliases[alias.casefold()]:
+                aliases[alias.casefold()].append(model)
+    matches = aliases.get(requested, [])
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        raise SparkError('Ambiguous model alias: ' + name + '. Use one of: ' + ', '.join(m['id'] for m in matches) + '.')
+    closest = difflib.get_close_matches(requested, aliases, n=1, cutoff=.6)
+    hint = f' Did you mean {closest[0]}?' if closest else ''
+    raise SparkError('Unknown model: ' + name + '.' + hint + ' Run sparky models to see available names.')
 
-
-def import_models(path, prefix):
-    """Import only model metadata. Never copy API keys or context constants."""
-    source = json.loads(Path(path).expanduser().read_text())
-    models = {}
-    for provider in source.get("provider", {}).values():
-        for key, value in provider.get("models", {}).items():
-            model_id = value.get("id") or key
-            if not model_id.startswith(prefix):
-                model_id = prefix + model_id
-            tail = model_id.removeprefix(prefix)
-            opts = {"name": value.get("name", tail), "output_tokens": value.get("limit", {}).get("output", 0),
-                    "inputs": value.get("modalities", {}).get("input", ["text"]),
-                    "reasoning": value.get("reasoning", False)}
-            aliases = [family for family in ("nemotron", "glm", "deepseek", "mimo") if tail.startswith(family)]
-            if "qwen" in tail:
-                aliases = ["qwen27b" if "27b" in tail else "qwen"]
-            if tail == "spark-auto":
-                aliases = ["auto"]
-            opts["aliases"] = aliases
-            label = opts["name"].lower()
-            if "2 sparks" in label or "two sparks" in label:
-                opts["nodes"] = ["spark01", "spark02"]
-            elif "spark02" in label:
-                opts["nodes"] = ["spark02"]
-            elif "spark01" in label:
-                opts["nodes"] = ["spark01"]
-            models[model_id] = opts
-    return models

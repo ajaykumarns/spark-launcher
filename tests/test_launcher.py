@@ -170,9 +170,9 @@ providers:
                   "manager_url": "http://127.0.0.1:8000"}
         args = remote_command(config, "load", "test")
         import shlex
-        words = shlex.split(args[2].split(" node ", 1)[1])
+        words = shlex.split(args[-1].split(" node ", 1)[1])
         self.assertEqual(words[2], config["remote_root"])
-        self.assertNotIn("Authorization", args[2])
+        self.assertNotIn("Authorization", args[-1])
         with self.assertRaises(SparkError):
             safe_host("-oProxyCommand=evil")
 

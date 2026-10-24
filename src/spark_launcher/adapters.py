@@ -16,8 +16,10 @@ HARNESSES = ("claude", "hermes", "codex", "opencode")
 
 def executable(config, harness):
     binary = config.get("binaries", {}).get(harness) or shutil.which(harness)
+    if binary:
+        binary = str(Path(binary).expanduser())
     if not binary or not os.access(binary, os.X_OK):
-        raise SparkError(f"{harness} is not installed. Set binaries.{harness} in the site file.")
+        raise SparkError(f"{harness} is not installed or executable. Install it or set binaries.{harness} in the site file.")
     return str(Path(binary).expanduser().absolute())
 
 

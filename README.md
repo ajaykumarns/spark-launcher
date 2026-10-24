@@ -10,7 +10,44 @@ sparky codex --model deepseek --project ~/dev/project
 sparky opencode --model qwen
 ```
 
-Running `sparky` without arguments shows help. `sparky status` shows a short table of device memory, loaded models, and queued work. Use `sparky status --json` for full machine-readable details.
+Running `sparky` without arguments shows help. Normal commands print tables or short messages. Every public data command accepts `--json` for scripts. You can put it before or after the command. Nested configuration commands also accept it at the end.
+
+```sh
+sparky status                       # What is running and how much RAM is available
+sparky models                       # Names and configured context limits; no model load
+sparky models qwen                  # Full model ID, aliases, limits, and configured devices
+sparky models --installed           # Include audio, ComfyUI, and image checkpoints
+sparky devices                      # RAM, disk, GPU allocation, and containers
+sparky plan load glm                # Explain required swaps without changing services
+sparky config show                  # Central configuration as a table
+sparky config show qwen             # Per-placement model settings
+sparky config validate              # A validation result, without a file dump
+sparky logs --limit 5               # Local harness launch history
+sparky doctor                       # Check every installed harness and the gateway
+```
+
+A configured route is not proof that a model is loaded. Use `status` for actual running placement. `models --installed` describes installed image weights as **on demand**. Their memory residency is not inferred from files on disk.
+
+Long model operations print progress to stderr. They finish active work before a device changes. A load prints the idle models it needs to unload. ComfyUI submission returns a job ID; it does not claim that execution has finished. Pressing Ctrl+C stops the local wait. Remote work may still continue. Check `sparky status` before another operation.
+
+For launch previews, use `--dry-run`. Use `--prepare` to write harness settings without starting it. Both print a short human summary. Add `--json` only if a script needs the full launch plan. To pass a harness's own options, put them after `--`.
+
+```sh
+sparky claude --model qwen --dry-run
+sparky codex --model nemotron --prepare
+sparky codex --model qwen -- exec --json 'Explain this project'
+```
+
+JSON stdout contains exactly one result object. Progress and banners do not enter it. Script errors use JSON on stderr and a nonzero exit status. Exit 1 means an operation failed. Exit 2 means command syntax is invalid. Exit 130 means the local wait was interrupted. `doctor` and `devices` can return a partial result with exit 1. Native harnesses keep their own output and exit status. Sparky's `--json` applies to harness previews; a harness's native JSON flag goes after `--`.
+
+```sh
+sparky status --json
+sparky --json plan load glm
+sparky config show qwen --json
+sparky logs --limit 5 --json
+```
+
+`ui --json` returns the UI URL without opening a browser. Logs can be read without gateway access or a client file. Bad history files are skipped and reported. `--offline` always labels cached model data. SSH operations give a sign-in link when Tailscale needs an identity check. They do not print private SSH diagnostics.
 
 ## Central configuration
 
@@ -107,6 +144,10 @@ Copy `dist/sparky.pyz` to `~/.local/bin/sparky` on both Sparks. Stage the cluste
 sparky node install --dir /path/to/staged-config
 ```
 
-The staged folder must contain `models.json`. The first install creates the central file. A later install preserves an existing central file. `sparky` is the sole command. Old `spark`, `spark-models`, and `opencode-spark` commands are removed. There are no compatibility wrappers.
+The staged folder must contain `models.json`. The first install creates the central file. A later install preserves an existing central file. The `node` command is the private machine protocol. Normal users do not need it. Its output stays JSON for the manager and SSH transport.
+
+`sparky` is the sole command. Old `spark`, `spark-models`, and `opencode-spark` commands are removed. There are no compatibility wrappers.
+
+The review and checks are documented in [docs/usability-review.md](docs/usability-review.md).
 
 Focused verification tools cover resource planning, node reservations, guarded ComfyUI execution, numeric recipe rendering, native harness parsers, and synthetic harness requests. Synthetic tests do not prove model quality. Live checks must distinguish a prepared recipe from a loaded and verified model.

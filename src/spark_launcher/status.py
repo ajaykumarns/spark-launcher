@@ -1,15 +1,7 @@
 """Short terminal view of the controller status. No device operations."""
 
 
-def table(headers, rows):
-    widths = [max(len(str(row[i])) for row in [headers, *rows]) for i in range(len(headers))]
-    return "\n".join("  ".join(str(value).ljust(width) for value, width in zip(row, widths)).rstrip()
-                     for row in [headers, *rows])
-
-
-def memory(value):
-    return "unknown" if value is None else f"{value / 1024**3:.1f} GiB"
-
+from .presentation import table, memory
 
 def format_status(data):
     devices = []
@@ -38,7 +30,7 @@ def format_status(data):
     if waiting:
         lines.append("Waiting: " + ", ".join(item["workload"] for item in waiting))
     else:
-        lines.append("No work is waiting for a device.")
+        lines.append("Device requests waiting: 0.")
     if admission.get("config_transition"):
         lines.append("New work is paused for a configuration change.")
     protected = [name for name, state in data.get("models", {}).items() if state.get("keep_loaded")]
