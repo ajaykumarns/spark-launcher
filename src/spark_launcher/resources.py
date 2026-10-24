@@ -13,9 +13,15 @@ KINDS = {"llm", "audio", "comfyui", "comfy_model"}
 
 def read_cluster(path):
     path = Path(path)
-    text = path.read_text()
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        raise SparkError(f"Central configuration file not found: {path}. Check remote_root in the client file.") from None
     if path.suffix == ".json":
-        config = json.loads(text)
+        try:
+            config = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise SparkError(f"Invalid central JSON in {path} at line {error.lineno}, column {error.colno}. Fix the file and run sparky config validate.") from None
     else:
         try:
             import yaml
@@ -40,18 +46,28 @@ def write_cluster(path, config):
 def validate_cluster(config):
     if not isinstance(config, dict) or config.get("version") != 1:
         raise SparkError("Unsupported cluster config version.")
-    if set(config.get("nodes", {})) != {"spark01", "spark02"}:
+    if not isinstance(config.get("nodes"), dict) or set(config["nodes"]) != {"spark01", "spark02"}:
         raise SparkError("Define spark01 and spark02.")
+    if not isinstance(config.get("models"), dict) or not isinstance(config.get("policy", {}), dict):
+        raise SparkError("Central models and policy must be mappings. Run sparky config validate after fixing the file.")
     if config.get("policy", {}).get("interrupt_active_jobs", False):
         raise SparkError("Interrupting active jobs is not supported.")
     seen = set()
     for name, model in config.get("models", {}).items():
+        if not isinstance(model, dict) or not isinstance(model.get("settings"), dict):
+            raise SparkError(f"{name} and its settings must be mappings.")
+        if not isinstance(model.get("aliases", []), list) or any(not isinstance(alias, str) for alias in model.get("aliases", [])):
+            raise SparkError(f"{name} aliases must be a list of names.")
+        if type(model.get("keep_loaded", False)) is not bool:
+            raise SparkError(f"{name} keep_loaded must be true or false.")
         if model.get("kind") not in KINDS:
             raise SparkError(f"Unknown workload kind: {name}.")
         placement = model.get("run_on")
         if placement not in PLACEMENTS or placement not in model.get("settings", {}):
             raise SparkError(f"No settings for {name} on {placement}.")
         for on, settings in model["settings"].items():
+            if not isinstance(settings, dict) or not isinstance(settings.get("parameters", {}), dict):
+                raise SparkError(f"{name}/{on} settings and parameters must be mappings.")
             if on not in PLACEMENTS:
                 raise SparkError(f"Unknown placement for {name}: {on}.")
             if model["kind"] == "llm":
@@ -67,7 +83,7 @@ def validate_cluster(config):
                     raise SparkError(f'Invalid request concurrency for {name}.')
                 for key,value in setting.get('parameters',{}).items():
                     if key=='gpu_memory_utilization':
-                        if not isinstance(value,(int,float)) or not 0<value<=1:
+                        if isinstance(value,bool) or not isinstance(value,(int,float)) or not 0<value<=1:
                             raise SparkError(f'Invalid GPU memory fraction for {name}.')
                     elif type(value) is not int or value<0:
                         raise SparkError(f'Invalid numeric recipe parameter for {name}: {key}.')

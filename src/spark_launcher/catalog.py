@@ -196,4 +196,3 @@ def resolve(catalog, name):
     closest = difflib.get_close_matches(requested, aliases, n=1, cutoff=.6)
     hint = f' Did you mean {closest[0]}?' if closest else ''
     raise SparkError('Unknown model: ' + name + '.' + hint + ' Run sparky models to see available names.')
-

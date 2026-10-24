@@ -125,6 +125,27 @@ class UsabilityTests(unittest.TestCase):
         self.assertIn('PLACEMENT: spark02', text)
 
 
+    def test_invalid_central_file_has_location_and_recovery_command(self):
+        from spark_launcher.resources import read_cluster, validate_cluster
+        path = self.root / 'broken.json'
+        path.write_text('{broken')
+        with self.assertRaisesRegex(SparkError, 'line 1.*sparky config validate'):
+            read_cluster(path)
+        bad = dict(self.cluster, models=[])
+        with self.assertRaisesRegex(SparkError, 'models and policy must be mappings'):
+            validate_cluster(bad)
+
+    def test_configured_executable_expands_home_before_access_check(self):
+        from spark_launcher.adapters import executable
+        binary = self.root / 'bin/claude'
+        binary.parent.mkdir()
+        binary.write_text('#!/bin/sh\nexit 0\n')
+        binary.chmod(0o700)
+        config = {**self.config, 'binaries': {'claude': '~/bin/claude'}}
+        with patch.dict(os.environ, {'HOME': str(self.root)}):
+            self.assertEqual(executable(config, 'claude'), str(binary))
+
+
     def test_json_option_works_before_and_after_nested_commands(self):
         for args in (['--json', 'config', 'show'], ['config', '--json', 'show'], ['config', 'show', '--json']):
             self.assertEqual(json.loads(self.invoke(args)[1]), self.document)

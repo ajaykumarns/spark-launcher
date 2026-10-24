@@ -37,7 +37,7 @@ This review covered every public command, its help, normal output, JSON output, 
 | An unsupported placement gave little guidance. | The error lists available placements. |
 | Offline output could appear current. | Cached data is explicitly labeled. Missing caches explain how to create one. |
 | Missing executables and `~/...` executable paths behaved poorly. | Paths expand before access checks. Errors say how to install or configure the executable. |
-| Malformed client settings could cause a traceback. | Common type and JSON errors now give an actionable message. |
+| Malformed client or central settings could cause a traceback. | Common type and JSON errors now give an actionable message. |
 | HTTP errors hid safe resource-controller explanations. | Only the local controller's safe error string is carried through SSH. Admin and backend response bodies stay private. |
 | Tailscale sign-in links could be hidden until a long load timeout. | The SSH reader checks partial stderr every five seconds and returns the known identity-check URL. Raw diagnostics stay private. |
 | Diagnostic checks stopped at the first failure. | `doctor` reports the gateway and all requested harness checks, then returns an appropriate exit status. |
