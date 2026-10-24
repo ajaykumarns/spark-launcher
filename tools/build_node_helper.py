@@ -9,12 +9,15 @@ root = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory() as temp:
     stage = Path(temp)
     shutil.copytree(root / "src/spark_launcher", stage / "spark_launcher", ignore=shutil.ignore_patterns("__pycache__"))
-    for package in ('rich', 'pygments', 'markdown_it', 'mdurl'):
+    for package in ('rich', 'pygments', 'markdown_it', 'mdurl', 'yaml'):
         spec = importlib.util.find_spec(package)
         if not spec or not spec.submodule_search_locations:
             raise SystemExit('Build with the project Python environment: uv run make node-helper')
-        shutil.copytree(next(iter(spec.submodule_search_locations)), stage / package, ignore=shutil.ignore_patterns('__pycache__'))
-    for name in ('rich', 'pygments', 'markdown-it-py', 'mdurl'):
+        # The archive is built on macOS and runs on Linux. Use PyYAML's pure
+        # Python fallback; never copy host-specific native extensions.
+        shutil.copytree(next(iter(spec.submodule_search_locations)), stage / package,
+                        ignore=shutil.ignore_patterns('__pycache__','*.so','*.pyd','*.dll','*.dylib'))
+    for name in ('rich', 'pygments', 'markdown-it-py', 'mdurl', 'PyYAML'):
         distribution = importlib.metadata.distribution(name)
         for entry in distribution.files or []:
             if entry.parts and entry.parts[0].endswith('.dist-info'):

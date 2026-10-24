@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 from .catalog import SparkError, atomic_write, state_dir, timestamp, write_json
+from .locking import file_lock
 
 HARNESSES = ("claude", "hermes", "codex", "opencode")
 
@@ -18,7 +19,7 @@ def executable(config, harness):
     binary = config.get("binaries", {}).get(harness) or shutil.which(harness)
     if binary:
         binary = str(Path(binary).expanduser())
-    if not binary or not os.access(binary, os.X_OK):
+    if not binary or not Path(binary).is_file() or not os.access(binary, os.X_OK):
         raise SparkError(f"{harness} is not installed or executable. Install it or set binaries.{harness} in the site file.")
     return str(Path(binary).expanduser().absolute())
 
@@ -69,7 +70,7 @@ def build_plan(config, catalog, model, harness, project, session):
                 "toolcall": True, "reasoning": item.get("reasoning", False),
                 "modalities": {"input": item.get("inputs") or ["text"], "output": ["text"]}}
         selected = "spark/" + mid.removeprefix(prefix)
-        raw = {"enabled_providers": ["spark"], "provider": {"spark": {"npm": "@ai-sdk/openai-compatible",
+        raw = {"provider": {"spark": {"npm": "@ai-sdk/openai-compatible",
                "name": "Spark Gateway", "options": {"baseURL": origin + "/v1", "apiKey": "spark-keyless",
                "timeout": timeout, "headers": headers}, "models": models}}, "model": selected, "small_model": selected}
         env["OPENCODE_CONFIG_CONTENT"] = json.dumps(raw)
@@ -88,12 +89,7 @@ def sync_hermes(config, catalog, session):
     root = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")).expanduser()
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     path, lock = root / "config.yaml", root / "config.yaml.spark-lock"
-    try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        raise SparkError("Another Spark process holds the Hermes configuration lock.") from None
-    os.close(fd)
-    try:
+    with file_lock(lock,'Another Spark process holds the Hermes configuration lock.'):
         original = path.read_bytes() if path.exists() else b""
         document = yaml.load(original.decode()) or {}
         if not isinstance(document, dict):
@@ -112,7 +108,9 @@ def sync_hermes(config, catalog, session):
                          "models": {m["id"]: {"context_length": m["context_tokens"],
                                    "timeout_seconds": config["timeout_seconds"],
                                    "stale_timeout_seconds": config["timeout_seconds"]} for m in catalog["models"]}})
-        provider.setdefault("extra_headers", {})["X-Client-ID"] = "sparky/hermes"
+        extra_headers=provider.setdefault('extra_headers',{})
+        if not isinstance(extra_headers,dict):raise SparkError('Hermes Spark extra_headers must be a mapping.')
+        extra_headers['X-Client-ID']='sparky/hermes'
         buffer = io.StringIO()
         yaml.dump(document, buffer)
         encoded = buffer.getvalue().encode()
@@ -128,9 +126,7 @@ def sync_hermes(config, catalog, session):
         if original:
             atomic_write(backup, original)
         atomic_write(path, encoded)
-        return str(backup) if original else None
-    finally:
-        lock.unlink(missing_ok=True)
+        return str(backup) if original else ''
 
 
 def codex_catalog(plan, catalog):
@@ -165,12 +161,24 @@ def child_env(plan):
     for key in plan["environment_unset"]:
         env.pop(key, None)
     env.update(plan["environment_overrides"])
+    if plan['harness']=='opencode' and os.environ.get('OPENCODE_CONFIG_CONTENT'):
+        try:original=json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])
+        except ValueError:raise SparkError('OPENCODE_CONFIG_CONTENT must contain valid JSON.') from None
+        if not isinstance(original,dict) or not isinstance(original.get('provider',{}),dict):
+            raise SparkError('OpenCode process settings and provider must be mappings.')
+        owned=json.loads(env['OPENCODE_CONFIG_CONTENT'])
+        original.setdefault('provider',{}).update(owned.pop('provider'))
+        original.update(owned)
+        if isinstance(original.get('enabled_providers'),list) and 'spark' not in original['enabled_providers']:
+            original['enabled_providers'].append('spark')
+        env['OPENCODE_CONFIG_CONTENT']=json.dumps(original)
     return env
 
 
 def check_passthrough(harness, extra):
     for index, arg in enumerate(extra):
-        if arg in ("--model", "-m", "--provider", "--oss", "--local-provider") or arg.startswith(("--model=", "--provider=", "-m=", "--local-provider=")):
+        if arg=='--':break  # Following words are literal prompt text.
+        if arg in ("--model", "-m", "--provider", "--oss", "--local-provider") or arg.startswith(("--model=", "--provider=", "--local-provider=")) or (arg.startswith('-m') and not arg.startswith('--')):
             raise SparkError("Select the model and provider through sparky.")
         if harness == "codex":
             value = None
@@ -182,7 +190,7 @@ def check_passthrough(harness, extra):
                 value = arg[2:]
             if value is not None:
                 key = value.split("=", 1)[0].strip().strip('"')
-                if key in ("model", "model_provider", "model_context_window", "model_catalog_json",
+                if key in ("model", "review_model", "model_provider", "model_context_window", "model_catalog_json",
                            "model_auto_compact_token_limit") or key.startswith("model_providers"):
                     raise SparkError("Set Codex model routing and context through sparky.")
 
@@ -206,6 +214,7 @@ def launch(config, catalog, plan, extra):
     code = 1
     try:
         code = subprocess.call([plan["binary"], *plan["args"], *extra], cwd=plan["project"], env=child_env(plan))
+        if code<0:code=128-code
         return code
     except KeyboardInterrupt:
         code = 130

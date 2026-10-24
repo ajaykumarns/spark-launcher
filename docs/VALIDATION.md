@@ -1,43 +1,30 @@
-# Spark launcher 0.1.0
+# Validation for Sparky 0.6.0
 
-The launcher is written in Python. It is installed as `spark` on the Mac. A Python standard-library node helper is installed on both Sparks. No launcher daemon is used.
+The [correctness review](correctness-review.md) records the findings and removals. This report replaces the obsolete 0.1.0 instructions.
 
-## Verified
-
-- All 16 software tests passed.
-- The installed Codex and OpenCode parsers accepted all seven model contexts.
-- The native Hermes resolver selected the remote gateway for all seven models.
-- Actual Claude Code and Codex clients completed streaming HTTP requests against a local synthetic server. Model IDs and client/session logging labels matched the launch settings.
-- All four installed harnesses launched their help or version command with exit code 0. The old `opencode-spark --model ...` and `spark-models list` forms also passed.
-- Keyless gateway discovery passed. Empty Messages, token-count, and Responses requests returned 400. The real admin provider endpoint returned 401. Unknown UI paths returned HTML, not provider configuration.
-- Model configuration hashes, container IDs, and container start times were equal before and after setup on both nodes. Nemotron and Qwen stayed loaded. Parakeet stayed running. Whisper stayed stopped.
-
-## Installed changes
-
-- One private site file at `~/.config/spark/config.json` holds gateway URLs, aliases, labels and client metadata. Context windows come from live gateway discovery. Explicit offline mode uses the cached discovery result.
-- Nemotron remains at 524288 tokens. Qwen remains at 262144 tokens. Other server model settings are unchanged.
-- Codex gets its own Spark provider and generated model catalog. Its initial compact threshold is 95 percent. This is a client summary threshold, not a model context limit.
-- Claude Code maps its primary and helper roles to the selected Spark model.
-- Hermes updates only its owned Spark provider. Its other providers, defaults and MCP settings remain in place.
-- OpenCode gets a per-process provider. Its persistent config files remain in place.
-- The old local commands are compatibility wrappers. Their original contents have private backups.
-- Bifrost exposes the two Anthropic inference routes through the existing keyless inference path. Its native Responses-to-Chat fallback is enabled for the existing model provider. Admin routes remain separate.
-- The gateway change used private server-side backups, validation and a graceful nginx reload. No model or audio container was restarted.
-
-## Scope of validation
-
-No fresh model inference, tool execution against a model, load test, or quality benchmark was run. The checks validate the launcher, native client settings, synthetic HTTP exchanges, gateway boundaries and service preservation. Existing model quality results were not rerun.
-
-## Use
+## Software checks
 
 ```sh
-spark
-spark claude --model nemotron
-spark hermes --model glm
-spark codex --model deepseek
-spark opencode --model qwen
-spark models
-spark devices
+uv sync --locked
+uv run --locked make test
+uv run --locked make node-helper
 ```
 
-Start a new launch to change a model. Native in-session model changes can retain the first model's context settings in some harnesses.
+The regression suite covers device ownership, placement changes, protected audio, ComfyUI reservations, interrupted startup, all-rank shutdown, lock recovery, recipe matching and rollback, maintenance fences, HTTP framing and streaming, harness settings, output formats, contexts and memory attribution. It uses temporary files, local servers and controlled device transports.
+
+The node archive also passed with Python site packages disabled. It includes Rich and portable YAML support. It contains no host-specific native extensions.
+
+## Native and live checks
+
+- Installed Codex and OpenCode parsers accepted all seven gateway routes and their context limits.
+- The installed Hermes resolver selected the remote provider for all seven routes. The check used a temporary configuration copy.
+- Installed Claude Code and Codex completed streaming requests against an isolated test server.
+- The new schema accepted the installed central configuration.
+- All 13 per-node recipe placements passed the stricter renderer. A recording stub replaced its write function. File hashes remained equal.
+- The rebuilt probe ran on both Sparks from a temporary archive. It reported Nemotron on Spark 1, Qwen on Spark 2 and Parakeet running. Whisper was stopped.
+
+## Scope
+
+Synthetic replies prove transport and configuration, not model quality. Recipe checks do not prove a fresh load, a new context limit, a new placement or peak GPU memory use. The review kept current model settings and assets.
+
+Client installation and controller activation are separate steps. Replacing an archive does not update modules already loaded in a controller process. Controller activation must wait for active calls and image work to finish. Model and audio processes can remain loaded.

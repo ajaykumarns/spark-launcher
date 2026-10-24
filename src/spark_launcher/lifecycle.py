@@ -2,7 +2,6 @@
 from __future__ import annotations
 import fcntl
 import json
-import os
 import signal
 import time
 from pathlib import Path
@@ -11,34 +10,56 @@ from .resources import read_cluster, selected
 from .resource_runtime import Runtime, command
 
 
+class StopRequested(BaseException):
+    """Stop a partially started model without leaving a rank behind."""
+
+
+def stop_units(runtime, info):
+    failures=[]
+    for node in info['nodes']:
+        try:runtime.unit(node,'stop',info['units'][node])
+        except Exception:failures.append(node)
+    if failures:raise SparkError('Could not confirm model shutdown on: '+', '.join(failures))
+
+
 def run_model(config_path, action, name):
     config = read_cluster(config_path)
     runtime = Runtime(config, config_path)
     state = Path(config['root'])/'manager'
-    model, placement, setting, nodes = selected(config, name)
+    if name not in config['models']:raise SparkError('Unknown lifecycle model.')
+    model=config['models'][name]
     if model['kind'] != 'llm':raise SparkError('This lifecycle entry is for language models.')
     actual_path=Path(config['root'])/'controller'/('running-'+name+'.json')
     def actual():
         try:return json.loads(actual_path.read_text())
-        except FileNotFoundError:return {'nodes':list(nodes),'units':setting['units']}
+        except FileNotFoundError:
+            _,_,setting,nodes=selected(config,name)
+            return {'nodes':list(nodes),'units':setting['units']}
     def stop():
         # Always stop actual placement. The desired config may already have changed.
         info=actual()
         (state/('stopping.'+name)).touch()
-        for node in info['nodes']:
-            runtime.unit(node,'stop',info['units'][node])
+        stop_units(runtime,info)
     if action=='stop':
         # Native FIFO only calls this after request drain. External explicit
         # unloads go through the controller, which also drains and fences calls.
         stop();return
     if action!='run':raise SparkError('Use run or stop.')
+    model,placement,setting,nodes=selected(config,name)
     locks=[]
     started_here=False
+    starting=True
+    finished=False
+    def finish(*_):
+        nonlocal finished
+        finished=True
+        if starting:raise StopRequested()
+    previous={sig:signal.signal(sig,finish) for sig in (signal.SIGTERM,signal.SIGINT)}
     try:
         for node in sorted(nodes):
             file=(state/('owner.'+node+'.lock')).open('a')
-            fcntl.flock(file,fcntl.LOCK_EX)
             locks.append(file)
+            fcntl.flock(file,fcntl.LOCK_EX)
         operation=(state/'operation.lock').open('a')
         with operation:
             fcntl.flock(operation,fcntl.LOCK_EX)
@@ -83,17 +104,16 @@ def run_model(config_path, action, name):
                 rendezvous=setting.get('rendezvous',{})
                 if rendezvous.get('node')==node:
                     deadline=time.monotonic()+100
-                    port=':'+str(rendezvous['port'])
+                    args=['ss','-H','-ltn','sport = :'+str(rendezvous['port'])]
+                    if node=='spark02':
+                        import shlex
+                        args=['ssh',config['nodes'][node]['ssh'],shlex.join(args)]
                     while time.monotonic()<deadline:
-                        if port in command(['ss','-ltn'],check=False).stdout:break
+                        if command(args,check=False).stdout.strip():break
                         time.sleep(1)
                     else:raise SparkError('The recipe rendezvous did not start.')
             fcntl.flock(operation,fcntl.LOCK_UN)
-        finished=False
-        def finish(*_):
-            nonlocal finished
-            finished=True
-        signal.signal(signal.SIGTERM,finish);signal.signal(signal.SIGINT,finish)
+        starting=False
         while not finished and not (state/('stopping.'+name)).exists():
             for node in nodes:
                 args=['systemctl','is-active','--quiet',setting['units'][node]]
@@ -103,11 +123,14 @@ def run_model(config_path, action, name):
                 if command(args,check=False).returncode:
                     raise SparkError('A model node stopped. The remaining nodes will be released.')
             time.sleep(3)
-        stop()
-    except BaseException:
-        # A failed startup may have started one node. Clean up only this model.
-        # Never restore old desired config or stop protected audio.
-        if started_here:stop()
-        raise
+    except StopRequested:
+        pass
     finally:
-        for file in reversed(locks):file.close()
+        # Signals are handled before any rank starts. Try every rank even if
+        # one node cannot be reached, then release all ownership locks.
+        starting=False
+        try:
+            if started_here:stop()
+        finally:
+            for file in reversed(locks):file.close()
+            for sig,handler in previous.items():signal.signal(sig,handler)

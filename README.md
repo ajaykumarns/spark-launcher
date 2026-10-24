@@ -65,9 +65,11 @@ The authoritative model file lives on Spark 1:
 
 It lists installed LLMs, Parakeet, Whisper, both ComfyUI engines, and installed ComfyUI checkpoints. Whisper stays disabled. Parakeet has `keep_loaded: true` and appears in `policy.protected_models`.
 
+The policy field `idle_ttl_seconds` controls the manager idle timeout. ComfyUI GPU work always requires exclusive use of its device. There is no switch to bypass that rule.
+
 Each LLM has a `run_on` value: `spark01`, `spark02`, or `both`. Its `settings` contain the supported placements. Each placement specifies its nodes, systemd units, model context, backend address, startup memory check, and numeric runtime parameters. A two-device placement runs one distributed model. It does not create two independent copies. The prepared Qwen two-device recipe needs a separate runtime load test before its performance can be claimed.
 
-Use [cluster.example.json](cluster.example.json) as the current site example. Paths and device addresses must match the site. Edit the file on Spark 1. The node files on Spark 2 are generated projections. They are not another model authority.
+Use [cluster.example.json](cluster.example.json) as the current site example. Paths and device addresses must match the site. Edit the file on Spark 1. Spark 1 derives service ownership from the model placements and sends each read-only probe over the direct link. Copied service lists do not control model detection. The small node files on Spark 2 support the ComfyUI service guard. They are not another model authority.
 
 ```sh
 sparky config show
@@ -103,7 +105,7 @@ sparky run comfyui workflow-api.json --on spark02
 
 `GET /sparky/catalog` exposes the central names, aliases, context limits, output budgets, modalities, and selected devices through the existing keyless inference ingress. The client fetches this catalog before each launch. It has no local model settings to override it. `spark-auto` keeps its existing gateway alias and uses the common context budget.
 
-The local file `~/.config/sparky/client.json` stores only gateway, SSH, client preferences, and executable paths. See [config.example.json](config.example.json). `SPARKY_CONFIG` selects another client file. `SPARKY_STATE_DIR` selects another local state directory. Use `--offline` explicitly to accept cached discovery data.
+The local file `~/.config/sparky/client.json` stores only gateway, SSH, client preferences, and executable paths. Local `models` settings are not supported; model settings belong on Spark 1. See [config.example.json](config.example.json). `SPARKY_CONFIG` selects another client file. `SPARKY_STATE_DIR` selects another local state directory. Use `--offline` explicitly to accept cached discovery data.
 
 | Harness | Integration |
 |---|---|
@@ -135,13 +137,13 @@ The controller binds loopback for gateway and administrator operations. Its dire
 
 ## Install and verify
 
-Python 3.11 or later is required. The client uses Rich for terminal tables and colors. The node archive includes the terminal renderer, so it needs no new system packages. The client uses `ruamel.yaml` to preserve Hermes comments. The controller uses the existing PyYAML installation to validate native manager configuration.
+Python 3.11 or later is required. The client uses Rich for terminal tables and colors. The node archive includes the terminal renderer, so it needs no new system packages. The client uses `ruamel.yaml` to preserve Hermes comments. The node archive includes a portable YAML parser to validate native manager configuration. It does not require host Python packages.
 
 ```sh
 uv tool install .
 sparky --help
 make test
-uv run make node-helper
+uv run --locked make node-helper
 ```
 
 Copy `dist/sparky.pyz` to `~/.local/bin/sparky` on both Sparks. Stage the cluster configuration on Spark 1. The explicit node installer creates the controller service and ComfyUI guards. It waits for image queues to drain before it restarts each ComfyUI service. It preserves running LLM and Parakeet containers. It keeps private backups of changed server files.
@@ -154,6 +156,6 @@ The staged folder must contain `models.json`. The first install creates the cent
 
 `sparky` is the sole command. Old `spark`, `spark-models`, and `opencode-spark` commands are removed. There are no compatibility wrappers.
 
-The review and checks are documented in [docs/usability-review.md](docs/usability-review.md).
+The interface review is in [docs/usability-review.md](docs/usability-review.md). The full correctness review is in [docs/correctness-review.md](docs/correctness-review.md). Current checks are in [docs/VALIDATION.md](docs/VALIDATION.md).
 
 Focused verification tools cover resource planning, node reservations, guarded ComfyUI execution, numeric recipe rendering, native harness parsers, and synthetic harness requests. Synthetic tests do not prove model quality. Live checks must distinguish a prepared recipe from a loaded and verified model.

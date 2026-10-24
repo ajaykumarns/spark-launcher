@@ -9,7 +9,11 @@ from .catalog import SparkError, request_json
 from .coordinator import Coordinator
 
 MAX_BODY=128*1024*1024
-HOP={'connection','keep-alive','proxy-authenticate','proxy-authorization','te','trailer','transfer-encoding','upgrade','host','content-length','accept-encoding'}
+HOP={'connection','keep-alive','proxy-authenticate','proxy-authorization','proxy-connection','te','trailer','transfer-encoding','upgrade','host','content-length','accept-encoding'}
+
+
+def hop_headers(headers):
+    return HOP|{part.strip().lower() for value in headers.get_all('Connection',[]) for part in value.split(',')}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -23,20 +27,44 @@ class Handler(BaseHTTPRequestHandler):
     def coordinator(self):return self.server.coordinator
 
     def body(self):
-        if self.headers.get('Transfer-Encoding','').lower()=='chunked':
-            data=bytearray()
-            while True:
-                size=int(self.rfile.readline(128).split(b';',1)[0],16)
-                if size==0:
-                    while self.rfile.readline(8192).strip():pass
-                    break
-                if len(data)+size>MAX_BODY:raise SparkError('Request exceeds the configured transport size.')
-                data.extend(self.rfile.read(size));self.rfile.read(2)
-            return bytes(data)
-        size=int(self.headers.get('Content-Length',0))
-        if size<0 or size>MAX_BODY:raise SparkError('Request exceeds the configured transport size.')
-        data=self.rfile.read(size)
-        if len(data)!=size:raise SparkError('Incomplete request body.')
+        lengths=self.headers.get_all('Content-Length',[])
+        encodings=self.headers.get_all('Transfer-Encoding',[])
+        if len(lengths)>1 or len(encodings)>1 or (lengths and encodings):
+            raise ValueError('Ambiguous request body framing.')
+        previous=self.connection.gettimeout()
+        self.connection.settimeout(60)
+        try:
+            if encodings:
+                if encodings[0].strip().lower()!='chunked':raise ValueError('Unsupported transfer encoding.')
+                data=bytearray()
+                while True:
+                    line=self.rfile.readline(128)
+                    token=line.split(b';',1)[0].strip()
+                    if not line.endswith(b'\r\n') or not token or any(c not in b'0123456789abcdefABCDEF' for c in token):
+                        raise ValueError('Invalid chunk size.')
+                    size=int(token,16)
+                    if size==0:
+                        total=0
+                        while True:
+                            trailer=self.rfile.readline(8193);total+=len(trailer)
+                            if not trailer.endswith(b'\r\n') or total>8192:raise ValueError('Invalid chunk trailer.')
+                            if trailer==b'\r\n':return bytes(data)
+                    if len(data)+size>MAX_BODY:raise ValueError('Request exceeds the configured transport size.')
+                    chunk=self.rfile.read(size)
+                    if len(chunk)!=size or self.rfile.read(2)!=b'\r\n':raise ValueError('Incomplete chunk.')
+                    data.extend(chunk)
+            length=lengths[0] if lengths else '0'
+            if not length.isdecimal():raise ValueError('Invalid Content-Length.')
+            size=int(length)
+            if size>MAX_BODY:raise ValueError('Request exceeds the configured transport size.')
+            data=self.rfile.read(size)
+            if len(data)!=size:raise ValueError('Incomplete request body.')
+            return data
+        finally:self.connection.settimeout(previous)
+
+    def json_body(self):
+        data=json.loads(self.body() or b'{}')
+        if not isinstance(data,dict):raise ValueError('The request body must be a JSON object.')
         return data
 
     def reply(self,data,status=200):
@@ -44,6 +72,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Type','application/json')
         self.send_header('Content-Length',str(len(body)))
+        self.send_header('Connection','close')
+        self.close_connection=True
         self.end_headers();self.wfile.write(body)
 
     def allowed_control(self):
@@ -65,15 +95,21 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(catalog)
         if path.startswith('/control/'):
             if not self.allowed_control():return self.reply({'error':'Use administrator SSH for control operations.'},403)
+            reads={'/control/status','/control/config','/control/leases'}
+            writes={'/control/fence','/control/plan','/control/load','/control/unload','/control/run','/control/placement'}
+            if path not in reads|writes:return self.reply({'error':'Unknown endpoint'},404)
+            if (path in reads and self.command!='GET') or (path in writes and self.command!='POST'):
+                return self.reply({'error':'Method not allowed.'},405)
             if path=='/control/fence' and self.command=='POST':
-                enabled=bool(json.loads(self.body()).get('enabled'))
+                enabled=self.json_body().get('enabled')
+                if type(enabled) is not bool:raise ValueError('enabled must be true or false.')
                 with c.cv:c.fenced=enabled;c.cv.notify_all()
                 return self.reply({'fenced':enabled})
             if self.command=='GET':
                 if path=='/control/status':return self.reply(c.snapshot(True))
                 if path=='/control/config':return self.reply({'path':str(c.path),'config':c.refresh()})
                 if path=='/control/leases':return self.reply(c.snapshot()['admission'])
-            data=json.loads(self.body() or b'{}')
+            data=self.json_body()
             if path=='/control/plan':return self.reply(c.plan(data['model'],data.get('action','load'),data.get('on')))
             if path=='/control/load':return self.reply(c.load(data['model']))
             if path=='/control/unload':return self.reply(c.unload(data['model']))
@@ -90,7 +126,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({'node':nodes[0],**result})
             if path=='/control/placement':return self.reply(c.set_placement(data['model'],data['on']))
         if path in ('/jobs/acquire','/jobs/release','/jobs/cancel') and self.command=='POST':
-            data=json.loads(self.body())
+            data=self.json_body()
             node=data.get('node')
             if node not in c.config['nodes']:raise SparkError('Unknown job device.')
             expected={'spark01':{'127.0.0.1','::1',c.config['nodes']['spark01']['direct_ip']},
@@ -108,9 +144,11 @@ class Handler(BaseHTTPRequestHandler):
                 lease=c.leases.get(token)
                 if lease and lease['name'] not in ('comfyui@'+node,'cpu-probe@'+node):raise SparkError('Lease belongs to another workload.')
             c.release(token);return self.reply({'status':'released'})
-        if self.command=='POST' and path in ('/v1/chat/completions','/v1/completions','/v1/responses','/v1/embeddings'):
+        # Bifrost translates Responses into Chat Completions. No embedding
+        # runtime or native Responses server is installed behind this proxy.
+        if self.command=='POST' and path in ('/v1/chat/completions','/v1/completions'):
             if not self.allowed_control():return self.reply({'error':'Use the existing gateway for inference.'},403)
-            body=json.loads(self.body())
+            body=self.json_body()
             if not isinstance(body.get('model'),str):return self.reply({'error':'model is required'},400)
             name,token=c.llm_request(body['model'])
             try:
@@ -122,7 +160,7 @@ class Handler(BaseHTTPRequestHandler):
     def proxy(self,origin,path,body):
         target=urlsplit(origin)
         connection=http.client.HTTPConnection(target.hostname,target.port,timeout=7200)
-        headers={k:v for k,v in self.headers.items() if k.lower() not in HOP}
+        headers={k:v for k,v in self.headers.items() if k.lower() not in hop_headers(self.headers)}
         headers['Content-Length']=str(len(body))
         started=False
         try:
@@ -130,7 +168,7 @@ class Handler(BaseHTTPRequestHandler):
             response=connection.getresponse()
             self.send_response(response.status)
             for key,value in response.getheaders():
-                if key.lower() not in HOP:self.send_header(key,value)
+                if key.lower() not in hop_headers(response.headers):self.send_header(key,value)
             # Close-delimited streaming avoids buffering long reasoning replies.
             self.send_header('Connection','close');self.end_headers();started=True
             while True:

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import csv
 import json
-import os
 import shlex
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .catalog import SparkError, request_json
+from .resources import model_units
 
 MIB = 1024**2
 
@@ -162,9 +162,7 @@ def specification(config, node):
         containers = model.get('monitoring', {}).get('containers', [])
         if model['kind'] == 'audio':
             containers = model['settings'].get(node, {}).get('containers', [])
-        units = config['nodes'][node].get('units', {}).get(name, [])
-        if isinstance(units, str):
-            units = [units]
+        units = model_units(model,node)
         owners.append({'id': name, 'name': (model.get('aliases') or [name])[0] if model['kind'] == 'llm' else name.title(),
                        'containers': containers, 'units': units})
     owners.append({'id': 'comfyui', 'name': 'ComfyUI', 'units': [config['nodes'][node]['comfy_unit']]})

@@ -137,10 +137,6 @@ def parser():
     rpc.add_argument('operation', choices=('plan', 'config', 'placement', 'run', 'validate'))
     rpc.add_argument('--root', required=True)
     rpc.add_argument('--payload', default='{}')
-    lifecycle = node_sub.add_parser('lifecycle')
-    lifecycle.add_argument('operation', choices=('run', 'stop'))
-    lifecycle.add_argument('model')
-    lifecycle.add_argument('--file', required=True)
     for name in ('status', 'load', 'unload', 'gateway'):
         child = node_sub.add_parser(name)
         child.add_argument('--root', required=True)
@@ -203,11 +199,7 @@ def node_action(args):
         return None
     if args.action == 'probe':
         from .resource_runtime import probe
-        return probe(json.loads(Path(args.file).read_text()))
-    if args.action == 'lifecycle':
-        from .lifecycle import run_model
-        run_model(args.file, args.operation, args.model)
-        return None
+        return probe(json.loads(sys.stdin.read() if args.file=='-' else Path(args.file).read_text()))
     if args.action == 'rpc':
         payload = json.loads(sys.stdin.read() if args.payload == '-' else args.payload)
         if args.operation in ('config', 'validate'):
@@ -397,7 +389,7 @@ def run(argv=None):
     if args.command == 'sync':
         catalog = fetch_catalog(config)
         backup = sync_hermes(config, catalog, uuid.uuid4().hex)
-        data = {'status': 'updated' if backup else 'current', 'backup': backup, 'models': len(catalog['models'])}
+        data = {'status': 'updated' if backup is not None else 'current', 'backup': backup or None, 'models': len(catalog['models'])}
         emit(data, lambda d: view.notice('Hermes settings', 'Hermes Spark provider is current. Unrelated providers were kept.' +
              (f"\nPrivate backup: {d['backup']}" if d['backup'] else '')), args.json)
         return 0

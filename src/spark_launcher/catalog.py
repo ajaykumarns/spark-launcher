@@ -67,21 +67,17 @@ def validate_config(config):
     config.setdefault("default_model", config["model_prefix"] + "spark-auto")
     if not isinstance(config["default_model"], str):
         raise SparkError("default_model must be a model name or alias.")
-    config.setdefault("models", {})
+    if 'models' in config:
+        raise SparkError('Model settings belong on Spark 1. Remove the unused client models field.')
     config.setdefault("binaries", {})
     if type(config["compact_percent"]) is not int or not 50 <= config["compact_percent"] <= 95:
         raise SparkError("compact_percent must be 50..95.")
     if type(config["timeout_seconds"]) is not int or not 1 <= config["timeout_seconds"] <= 86400:
         raise SparkError("timeout_seconds must be 1..86400.")
-    if not isinstance(config["models"], dict) or not isinstance(config["binaries"], dict):
-        raise SparkError("Client models and binaries must be mappings. Check " + str(config_path()) + ".")
+    if not isinstance(config["binaries"], dict):
+        raise SparkError("Client binaries must be a mapping. Check " + str(config_path()) + ".")
     if any(not isinstance(value, str) for value in config["binaries"].values()):
         raise SparkError("Each binaries entry must be an executable path.")
-    for options in config["models"].values():
-        if not isinstance(options, dict):
-            raise SparkError("Client model entries must be mappings.")
-        if any(key in options for key in ("context", "context_tokens", "context_length")):
-            raise SparkError("Context limits come from the gateway, not the site file.")
     return config
 
 
@@ -129,17 +125,30 @@ def request_json(url, *, payload=None, method=None, headers=None, timeout=20, ex
 
 
 def make_catalog(config, wire):
+    if not isinstance(wire,dict) or not isinstance(wire.get('data'),list):
+        raise SparkError('The gateway returned an invalid model catalog.')
     prefix = config["model_prefix"]
     models, auto = [], None
+    seen=set()
     for row in wire.get("data", []):
+        if not isinstance(row,dict) or not isinstance(row.get('id'),str):
+            raise SparkError('The gateway returned an invalid model entry.')
         model_id = row.get("id", "")
         if not model_id.startswith(prefix):
             continue
+        if model_id in seen:raise SparkError('The gateway returned duplicate model IDs.')
+        seen.add(model_id)
+        for field in ('aliases','inputs','nodes'):
+            if field in row and (not isinstance(row[field],list) or any(not isinstance(v,str) or not v.strip() for v in row[field])):
+                raise SparkError('The gateway returned invalid '+field+' metadata.')
+        if 'output_tokens' in row and (type(row['output_tokens']) is not int or row['output_tokens']<=0):
+            raise SparkError('The gateway returned an invalid output token budget.')
+        if 'name' in row and not isinstance(row['name'],str):raise SparkError('The gateway returned an invalid model name.')
         if model_id == prefix + "spark-auto":
             auto = row
             continue
         context = row.get("context_length", 0)
-        if not isinstance(context, int) or context <= 0:
+        if type(context) is not int or context <= 0:
             continue
         model = {k: row[k] for k in ("name", "aliases", "output_tokens", "inputs", "reasoning", "nodes") if k in row}
         model.update(id=model_id, context_tokens=context)
@@ -148,14 +157,15 @@ def make_catalog(config, wire):
             raise SparkError(f"Output budget exceeds the live context for {model_id}.")
         models.append(model)
     if auto and models:
-        # Auto may route to any language model. Its common budget is their minimum.
+        # Spark 1 knows the configured routing targets. Prefer its explicit
+        # common budget instead of including unrelated installed models.
         minimum = min(m["context_tokens"] for m in models)
         advertised = auto.get("context_length", 0)
-        if isinstance(advertised, int) and advertised > 0:
-            minimum = min(minimum, advertised)
+        if type(advertised) is int and advertised > 0:
+            minimum = advertised
         model_id = auto["id"]
         models.append({**{k:auto[k] for k in ("name","aliases","output_tokens","inputs") if k in auto}, "id": model_id,
-                       "context_tokens": minimum, "context_source": "minimum routed model context"})
+                       "context_tokens": minimum, "context_source": "gateway auto route context"})
         models[-1].setdefault("name", "Spark Auto")
         if models[-1].get("output_tokens", 0) >= minimum:
             raise SparkError("Auto output budget exceeds the shared context.")
@@ -170,9 +180,13 @@ def fetch_catalog(config, offline=False):
     if offline:
         try:
             catalog = json.loads(path.read_text())
-        except (FileNotFoundError, json.JSONDecodeError):
+            if not isinstance(catalog,dict) or not isinstance(catalog.get('models'),list) or not isinstance(catalog.get('fetched_at'),str):
+                raise ValueError('Invalid catalog cache')
+            # Apply the live metadata checks to cached entries as well.
+            make_catalog(config,{'data':[{**m,'context_length':m['context_tokens']} for m in catalog['models']]})
+        except (FileNotFoundError, ValueError, KeyError, TypeError, SparkError):
             raise SparkError('No usable cached model list. Connect to the gateway and run sparky models first.') from None
-        if catalog["gateway"] != config["gateway"]:
+        if catalog.get("gateway") != config["gateway"]:
             raise SparkError("Cached catalog belongs to another gateway.")
         return catalog
     catalog = make_catalog(config, request_json(config["gateway"] + "/sparky/catalog"))

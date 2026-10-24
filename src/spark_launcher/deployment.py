@@ -4,9 +4,7 @@ import base64
 from importlib.resources import files
 import copy
 import json
-import os
 import shlex
-import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -29,15 +27,12 @@ def install_head(stage):
     config_path=root/'config/models.json'
     if config_path.exists():
         candidate=read_cluster(config_path)
+        if Path(candidate['root'])!=root:raise SparkError('The installed cluster root differs from the staged root. No services were changed.')
     else:write_cluster(config_path,candidate)
     config=candidate
     runtime=Runtime(config,config_path)
     # The original containers are the preservation baseline. Do not infer
     # memory residency solely from a container's running state.
-    for node,meta in config['nodes'].items():
-        data=json.dumps(meta,indent=2)+'\n'
-        if node=='spark01':atomic_write(folder/'node-spark01.json',data)
-        else:upload_worker(config,folder/'node-spark02.json',data.encode(),0o600)
     before=runtime.snapshot(True)
     print("Device baseline saved.",flush=True)
     atomic_write(backup/'services-before.json',json.dumps(before,indent=2)+'\n')
@@ -87,7 +82,6 @@ WantedBy=multi-user.target
     # Hold new admissions while the existing ingress is moved. Requests that
     # reached the old provider URL keep running until their normal completion.
     request_json('http://127.0.0.1:8020/control/fence',payload={'enabled':True})
-    completed=False
     try:
         # Install the ComfyUI guard only after queued work has finished. The
         # service ExecStop also drains, so a job arriving during this check is
@@ -119,7 +113,6 @@ WantedBy=multi-user.target
         # No forced cancellation: account for old requests that were already
         # running when the Bifrost URL was changed.
         runtime_activity_idle(runtime)
-        completed=True
     finally:
         request_json('http://127.0.0.1:8020/control/fence',payload={'enabled':False})
     after=runtime.snapshot(True)
@@ -225,10 +218,15 @@ def connect_gateway(config,backup):
         check['network_config']=prior['network_config']
         if check!=prior or actual['network_config']!=after['network_config']:
             raise SparkError('Gateway provider fields changed outside the intended URL.')
-    except BaseException:
-        api(before);config_path.write_bytes(old_config);nginx_path.write_bytes(old_nginx)
-        command(['sudo','-n','docker','exec','garuda-inference','nginx','-t'])
-        command(['sudo','-n','docker','exec','garuda-inference','nginx','-s','reload'])
+    except BaseException as original:
+        failures=[]
+        for restore in (lambda:api(before),lambda:config_path.write_bytes(old_config),
+                        lambda:nginx_path.write_bytes(old_nginx),
+                        lambda:command(['sudo','-n','docker','exec','garuda-inference','nginx','-t']),
+                        lambda:command(['sudo','-n','docker','exec','garuda-inference','nginx','-s','reload'])):
+            try:restore()
+            except Exception:failures.append(True)
+        if failures:raise SparkError('Gateway setup failed. Rollback needs attention. Backup: '+str(backup)) from original
         raise
     return {'admission_enabled':True,'catalog_enabled':True,'other_provider_fields_preserved':True}
 
@@ -241,9 +239,9 @@ def prepare_qwen_dual(config,stage):
     import copy
     recipe=copy.deepcopy(recipe)
     base=recipe['serve']['command']
-    base,_=replace_flag(base,'--tensor-parallel-size',2,'command')
-    base,_=replace_flag(base,'--max-num-seqs',4,'command')
-    base,_=replace_flag(base,'--gpu-memory-utilization',0.75,'command')
+    for flag,value in (('--tensor-parallel-size',2),('--max-num-seqs',4),('--gpu-memory-utilization',0.75)):
+        base,count=replace_flag(base,flag,value,'command')
+        if count!=1:raise SparkError('The installed NVIDIA recipe does not have one '+flag+' setting. No dual recipe was installed.')
     # Keep all NVIDIA environment, quantization, attention, prefix and MTP flags.
     base+=' \\\n  --nnodes 2 --node-rank 0 --master-addr "$HEAD_IP" --master-port "$MASTER_PORT"'
     recipe['serve']['command']=base

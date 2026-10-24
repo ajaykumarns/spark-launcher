@@ -1,14 +1,13 @@
 """Shared admission and action planning for language and ComfyUI jobs."""
 from __future__ import annotations
 import copy
-import hashlib
-import json
+import sqlite3
 import threading
 import time
 import uuid
 from pathlib import Path
 from .catalog import SparkError, atomic_write
-from .resources import read_cluster, write_cluster, resolve_workload, selected, matrix_sets, make_plan
+from .resources import read_cluster, write_cluster, resolve_workload, selected, matrix_sets, make_plan, enabled_llms
 from .resource_runtime import Runtime, command
 
 
@@ -23,6 +22,7 @@ class Coordinator:
         self.leases={}
         self.pending=[]
         self.fenced=False
+        self.reloading=False
         self.last_error=None
 
     def refresh(self):
@@ -49,7 +49,7 @@ class Coordinator:
                     existing=next((t for t,l in self.leases.items() if l['request_id']==request_id),None)
                     if existing:return existing
                     earlier=self.pending[:self.pending.index(entry)]
-                    blocked=self.fenced or any(self.overlap(entry,l) for l in self.leases.values()) or any(self.overlap(entry,p) for p in earlier)
+                    blocked=self.fenced or self.reloading or any(self.overlap(entry,l) for l in self.leases.values()) or any(self.overlap(entry,p) for p in earlier)
                     if not blocked:
                         token=uuid.uuid4().hex
                         self.runtime.event('admitted',workload=name,nodes=list(nodes),request_id=request_id)
@@ -86,7 +86,7 @@ class Coordinator:
             self.cv.notify_all()
         if lease:
             try:self.runtime.event('released',workload=lease['name'],request_id=lease['request_id'])
-            except OSError:pass
+            except (OSError,sqlite3.Error):pass
 
     def snapshot(self,fresh=False):
         data=self.runtime.snapshot(fresh)
@@ -100,7 +100,7 @@ class Coordinator:
                 state['active_requests']=max(sum(l['name']==name for l in self.leases.values()),native.get(name,0))
             data['admission']={'active':[{'workload':l['name'],'nodes':l['nodes'],'started_at':l['started_at']} for l in self.leases.values()],
                                'waiting':[{'workload':p['name'],'nodes':p['nodes']} for p in self.pending],
-                               'config_transition':self.fenced}
+                               'config_transition':self.fenced or self.reloading}
         data['config_path']=str(self.path)
         return data
 
@@ -131,20 +131,21 @@ class Coordinator:
             path=Path(self.config['root'])/'manager/config.yaml'
             before=yaml.safe_load(path.read_text())
             after=copy.deepcopy(before)
-            for name,model in self.config['models'].items():
-                if model['kind']!='llm':continue
+            for name in enabled_llms(self.config):
                 _,_,setting,_=selected(self.config,name)
                 entry=after['models'][name]
                 entry['proxy']=setting['backend_url']
                 entry['concurrencyLimit']=setting['concurrency']
                 entry.setdefault('capabilities',{})['context']=setting['context_tokens']
+            if 'idle_ttl_seconds' in self.config.get('policy',{}):
+                after['globalTTL']=self.config['policy']['idle_ttl_seconds']
             routing={'router':{'use':'matrix','settings':{'matrix':{'sets':matrix_sets(self.config)}}}}
             if self.routing_combinations(after.get('routing',{})) != self.routing_combinations(routing):after['routing']=routing
             if before==after:return
-            with self.cv:
-                self.fenced=True
-                while self.leases:self.cv.wait(0.5)
             try:
+                with self.cv:
+                    self.reloading=True
+                    while self.leases:self.cv.wait(0.5)
                 self.wait_native_idle()
                 # Keep real ComfyUI GPU work running through a manager reload.
                 # Only language model lifecycle is changed here.
@@ -164,11 +165,12 @@ class Coordinator:
                 self.runtime._cache=None
                 self.runtime.event('manager_config_applied',backup=str(backup),reason='Selected placement or runtime settings changed.')
             finally:
-                with self.cv:self.fenced=False;self.cv.notify_all()
+                with self.cv:self.reloading=False;self.cv.notify_all()
 
     def resolve_auto(self):
         rows=self.runtime.manager('/running').get('running',[])
         ready={r['model'] for r in rows if r['state']=='ready'}
+        if 'auto' not in self.config:raise SparkError('Automatic model routing is not configured.')
         targets=self.config['auto']['targets']
         return next((n for n in targets if n in ready),self.config['auto']['default'])
 
@@ -177,6 +179,10 @@ class Coordinator:
         with self.transition:
             state=self.runtime.snapshot(True)['models'].get(name,{})
             if state.get('state')=='ready' and set(state.get('nodes',[]))==set(nodes):return
+            snapshot=self.runtime.snapshot()
+            for other,row in snapshot['models'].items():
+                if other!=name and row.get('loaded') and self.config['models'][other].get('keep_loaded') and row['kind']=='llm' and set(nodes)&set(row['nodes']):
+                    raise SparkError(other+' must stay loaded on the requested device.')
             # The manager's native FIFO drains language requests and applies
             # its config-generated compatibility matrix. The lifecycle hook
             # releases only idle ComfyUI caches before starting units.
@@ -185,14 +191,19 @@ class Coordinator:
             self.runtime._cache=None
 
     def llm_request(self,requested):
-        self.sync_manager()
-        name=self.resolve_auto() if requested.removeprefix('garuda/')=='spark-auto' else resolve_workload(self.config,requested)[0]
-        model,_,_,nodes=selected(self.config,name)
-        if model['kind']!='llm':raise SparkError('Select a language model for this endpoint.')
-        self.reconcile_jobs()
-        token=self.acquire(name,nodes)
-        try:self.prepare_llm(name)
-        except BaseException:self.release(token);raise
+        if not isinstance(requested,str):raise SparkError('Select a language model by name.')
+        # Use one configuration generation for manager sync, reservation and
+        # startup. A placement edit must not change nodes between these steps.
+        with self.reconfigure:
+            self.sync_manager()
+            normalized=requested.strip().casefold().removeprefix('garuda/')
+            name=self.resolve_auto() if normalized in ('spark-auto','auto') else resolve_workload(self.config,requested)[0]
+            model,_,_,nodes=selected(self.config,name)
+            if model['kind']!='llm':raise SparkError('Select a language model for this endpoint.')
+            self.reconcile_jobs()
+            token=self.acquire(name,nodes)
+            try:self.prepare_llm(name)
+            except BaseException:self.release(token);raise
         return name,token
 
     def load(self,requested):
@@ -213,11 +224,14 @@ class Coordinator:
         return {'status':'ready','workload':name}
 
     def unload(self,requested):
-        self.refresh()
-        name,model=resolve_workload(self.config,requested)
-        if model.get('keep_loaded'):raise SparkError(f'{name} must stay loaded.')
-        _,_,_,nodes=selected(self.config,name)
-        token=self.acquire(name,nodes,exclusive=True)
+        with self.reconfigure:
+            self.refresh()
+            name,model=resolve_workload(self.config,requested)
+            if model.get('keep_loaded'):raise SparkError(f'{name} must stay loaded.')
+            _,_,_,desired=selected(self.config,name)
+            running=self.runtime.snapshot(True)['models'].get(name,{})
+            nodes=tuple(sorted(set(desired)|set(running.get('nodes',[]))))
+            token=self.acquire(name,nodes,exclusive=True)
         try:
             if model['kind']=='llm':
                 self.wait_native_idle({name})
@@ -277,12 +291,15 @@ class Coordinator:
     def catalog(self):
         self.refresh()
         data=[]
-        for name,model in self.config['models'].items():
-            if model['kind']!='llm':continue
+        for name in enabled_llms(self.config):
+            model=self.config['models'][name]
             _,on,setting,nodes=selected(self.config,name)
-            data.append({'id':'garuda/'+name,'name':model['name'],'context_length':setting['context_tokens'],
-                         'output_tokens':model.get('output_tokens',16384),'aliases':model.get('aliases',[]),
+            data.append({'id':'garuda/'+name,'name':model.get('name',name),'context_length':setting['context_tokens'],
+                         'output_tokens':model.get('output_tokens',min(16384,setting['context_tokens']-1)),'aliases':model.get('aliases',[]),
                          'inputs':model.get('inputs',['text']),'reasoning':model.get('reasoning',False),'nodes':list(nodes)})
-        data.append({'id':'garuda/spark-auto','name':'Spark Auto','context_length':min(x['context_length'] for x in data),
-                     'aliases':['auto'],'output_tokens':16384,'inputs':['text']})
+        if self.config.get('auto'):
+            targets={'garuda/'+name for name in self.config['auto']['targets']}
+            routed=[row for row in data if row['id'] in targets]
+            data.append({'id':'garuda/spark-auto','name':'Spark Auto','context_length':min(x['context_length'] for x in routed),
+                         'aliases':['auto'],'output_tokens':min(x['output_tokens'] for x in routed),'inputs':['text']})
         return {'data':data,'authority':'spark01','config_version':self.config['version']}

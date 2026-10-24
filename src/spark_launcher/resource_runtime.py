@@ -2,22 +2,21 @@
 from __future__ import annotations
 import copy
 import json
-import os
 import shlex
 import socket
 import subprocess
 import time
 from pathlib import Path
 from urllib.request import Request, urlopen
-from .catalog import SparkError, request_json, atomic_write
+from .catalog import SparkError, request_json
 from .control import read_env, safe_host
-from .resources import selected
+from .resources import selected, model_units
 
 GIB = 1024 ** 3
 
 
-def command(args, timeout=30, check=True):
-    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+def command(args, timeout=30, check=True, input=None):
+    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, input=input)
     if check and result.returncode:
         raise SparkError(f"Device operation failed: {args[0]} (exit {result.returncode}).")
     return result
@@ -39,16 +38,16 @@ def probe(node):
             if fields.get('Id'):
                 units[fields['Id']] = fields.get('ActiveState')
     containers = {}
-    names = node.get('containers', [])
-    if names:
-        result = command(['sudo', '-n', 'docker', 'inspect', *names], check=False)
+    ids=command(['sudo','-n','docker','ps','-aq']).stdout.split()
+    if ids:
+        template='{"name":{{json .Name}},"running":{{.State.Running}},"id":{{json .Id}},"started_at":{{json .State.StartedAt}},"oom_killed":{{.State.OOMKilled}}}'
+        result=command(['sudo','-n','docker','inspect','--format',template,*ids])
         try:
-            for c in json.loads(result.stdout or '[]'):
-                state = c['State']
-                containers[c['Name'].lstrip('/')] = {'running': state['Running'], 'id': c['Id'],
-                                                    'started_at': state['StartedAt'], 'oom_killed': state['OOMKilled']}
-        except ValueError:
-            pass
+            for line in result.stdout.splitlines():
+                item=json.loads(line);name=item.pop('name').lstrip('/')
+                containers[name]=item
+        except (ValueError,KeyError,AttributeError):
+            raise SparkError('Could not read the container state. No device action was taken.') from None
     assets = []
     for root in node.get('asset_roots', []):
         path = Path(root)
@@ -115,11 +114,14 @@ class Runtime:
         raise SparkError('Cannot confirm active manager requests. No model was stopped.')
 
     def inspect_node(self, name):
-        node = self.config['nodes'][name]
+        node = copy.deepcopy(self.config['nodes'][name])
+        # Service ownership follows the model definitions. Do not trust a
+        # second service list or a worker projection from an earlier install.
+        node['units']={model_name:model_units(model,name)
+                       for model_name,model in self.config['models'].items() if model['kind']=='llm'}
         if name == 'spark01':return probe(node)
-        remote_file = self.root/'controller/node-spark02.json'
         result = command(['ssh','-o','BatchMode=yes','-o','ConnectTimeout=8',safe_host(node['ssh']),
-                          '~/.local/bin/sparky node probe --file '+shlex.quote(str(remote_file))], timeout=35)
+                          '~/.local/bin/sparky node probe --file -'], timeout=35,input=json.dumps(node))
         return json.loads(result.stdout)
 
     def snapshot(self, fresh=False):
@@ -135,8 +137,7 @@ class Runtime:
             loaded_nodes=[]
             if model['kind']=='llm':
                 for n, data in nodes.items():
-                    unit=self.config['nodes'][n]['units'].get(name,[])
-                    values=unit if isinstance(unit,list) else [unit]
+                    values=model_units(model,n)
                     if any(data['units'].get(u) in ('active','activating') for u in values):loaded_nodes.append(n)
                 loaded=bool(loaded_nodes)
             elif model['kind']=='audio':

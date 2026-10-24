@@ -6,7 +6,6 @@
   "policy": {
     "interrupt_active_jobs": false,
     "idle_ttl_seconds": 10800,
-    "comfyui_exclusive_with_llms": true,
     "protected_models": [
       "parakeet"
     ]
@@ -19,33 +18,6 @@
       "comfy_url": "http://192.0.2.10:8188",
       "comfy_root": "/home/spark-user/image-gen/ComfyUI",
       "comfy_unit": "spark-imagegen.service",
-      "units": {
-        "qwen3.8-flash-next": [
-          "garuda-extra@qwen3.8-flash-next.service",
-          "sparky-qwen-dual.service"
-        ],
-        "glm-5.3-flash": [
-          "garuda-extra@glm-5.3-flash.service"
-        ],
-        "nemotron-3.5-super": [
-          "garuda-extra@nemotron-3.5-super.service"
-        ],
-        "deepseek-v4.1-flash-1017": [
-          "garuda-extra@deepseek-v4.1-flash-1017.service"
-        ],
-        "qwen3.8-27b": [
-          "garuda-vllm.service"
-        ],
-        "mimo-v2.6-flash": [
-          "garuda-mimo.service"
-        ]
-      },
-      "containers": [
-        "garuda-nemotron-3.5-super",
-        "garuda-diction-adapter",
-        "garuda-gateway",
-        "garuda-inference"
-      ],
       "asset_roots": [
         "/home/spark-user/spark-cluster/models",
         "/home/spark-user/image-gen/ComfyUI/models"
@@ -58,33 +30,6 @@
       "comfy_url": "http://192.0.2.11:8188",
       "comfy_root": "/home/spark-user/image-gen/ComfyUI",
       "comfy_unit": "spark-imagegen.service",
-      "units": {
-        "qwen3.8-flash-next": [
-          "garuda-extra@qwen3.8-flash-next.service",
-          "sparky-qwen-dual.service"
-        ],
-        "glm-5.3-flash": [
-          "garuda-extra@glm-5.3-flash.service"
-        ],
-        "nemotron-3.5-super": [
-          "garuda-extra@nemotron-3.5-super.service"
-        ],
-        "deepseek-v4.1-flash-1017": [
-          "garuda-extra@deepseek-v4.1-flash-1017.service"
-        ],
-        "qwen3.8-27b": [
-          "garuda-vllm.service"
-        ],
-        "mimo-v2.6-flash": [
-          "garuda-mimo.service"
-        ]
-      },
-      "containers": [
-        "garuda-qwen3.8-flash-next",
-        "whisper-api",
-        "parakeet-gateway",
-        "parakeet-engine"
-      ],
       "asset_roots": [
         "/home/spark-user/spark-cluster/models",
         "/home/spark-user/image-gen/ComfyUI/models"

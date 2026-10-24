@@ -14,6 +14,7 @@ from spark_launcher.adapters import build_plan, check_passthrough, child_env, co
 from spark_launcher.catalog import SparkError, fetch_catalog, make_catalog, resolve, validate_config
 from spark_launcher.control import remote_command, safe_host
 from spark_launcher.gateway import OPERATIONS, inference_routes, mutable_provider, translated_provider
+from spark_launcher.locking import file_lock
 
 
 class LauncherTests(unittest.TestCase):
@@ -24,8 +25,7 @@ class LauncherTests(unittest.TestCase):
                                           "HERMES_HOME": str(self.root / "hermes")})
         self.env.start()
         self.c = validate_config({"version": 1, "gateway": "https://spark.example:8443",
-                                  "default_model": "garuda/test", "models": {
-                                      "garuda/test": {"aliases": ["test"], "name": "Test", "output_tokens": 100}}})
+                                  "default_model": "garuda/test"})
         self.c["binaries"] = {h: "/usr/bin/true" for h in ("claude", "hermes", "codex", "opencode")}
         self.wire = {"data": [{"id": "garuda/test", "context_length": 20000, "aliases": ["test"], "output_tokens":100},
                               {"id": "garuda/second", "context_length": 30000},
@@ -124,9 +124,9 @@ providers:
         self.assertEqual(provider["models"]["garuda/test"]["context_length"], 20000)
         self.assertNotIn("X-Session-ID", provider["extra_headers"])
         self.assertIsNone(sync_hermes(self.c, self.cat, "again"))
-        (root / "config.yaml.spark-lock").touch()
-        with self.assertRaises(SparkError):
-            sync_hermes(self.c, self.cat, "locked")
+        with file_lock(root / "config.yaml.spark-lock", "locked"):
+            with self.assertRaises(SparkError):
+                sync_hermes(self.c, self.cat, "locked")
 
     def test_hermes_fresh_config(self):
         sync_hermes(self.c, self.cat, "fresh")

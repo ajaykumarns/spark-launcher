@@ -4,12 +4,12 @@ from __future__ import annotations
 import base64
 import copy
 import json
-import os
 import subprocess
 from pathlib import Path
 
 from .catalog import SparkError, atomic_write, request_json, timestamp, write_json
 from .control import read_env
+from .locking import file_lock
 
 # Pinned Bifrost transports/v2.3.2: nil flags allow every operation. A non-nil
 # map allows only explicit true flags. Preserve that default before disabling two.
@@ -63,12 +63,8 @@ def mutable_provider(provider):
 def enable_gateway(root):
     gateway = Path(root) / "gateway"
     lock = gateway / ".spark-gateway-lock"
-    fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    os.close(fd)
-    try:
+    with file_lock(lock,'Another Sparky command is updating the gateway.'):
         return _enable_gateway(gateway)
-    finally:
-        lock.unlink(missing_ok=True)
 
 
 def _enable_gateway(gateway):
@@ -115,7 +111,7 @@ def _enable_gateway(gateway):
         check["custom_provider_config"] = prior["custom_provider_config"]
         if check != prior or actual["custom_provider_config"] != after["custom_provider_config"]:
             raise SparkError("Provider validation failed.")
-    except Exception as original:
+    except BaseException as original:
         failures = []
         for operation in (lambda: api(before), lambda: config_path.write_bytes(old_config),
                           lambda: nginx_path.write_bytes(old_nginx), lambda: nginx("-t"),
@@ -126,6 +122,7 @@ def _enable_gateway(gateway):
                 failures.append(True)
         if failures:
             raise SparkError(f"Gateway setup failed. Rollback needs attention. Backup: {backup}") from None
+        if isinstance(original,KeyboardInterrupt):raise
         raise SparkError(f"Gateway setup failed. Previous settings were restored. Backup: {backup}") from original
     result = {"status": "configured", "anthropic_messages_route": True,
               "responses_translated_to_chat": True, "existing_provider_fields_preserved": True,

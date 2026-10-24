@@ -1,6 +1,5 @@
 """Read-only installed harness parser checks. No model inference."""
 import json
-import os
 import subprocess
 import uuid
 from pathlib import Path
