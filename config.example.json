@@ -8,16 +8,5 @@
   "admin_ssh_host": "spark01-admin",
   "worker_ssh_host": "spark02",
   "remote_root": "/home/your-user/spark-cluster",
-  "manager_url": "http://your-tailnet-address:8000",
-  "admin_url": "https://spark.example",
-  "models": {
-    "garuda/nemotron-3.5-super": {
-      "name": "Nemotron 3.5 Super",
-      "aliases": ["nemotron"],
-      "output_tokens": 16384,
-      "inputs": ["text", "image"],
-      "reasoning": true,
-      "nodes": ["spark01"]
-    }
-  }
+  "admin_url": "https://spark.example"
 }

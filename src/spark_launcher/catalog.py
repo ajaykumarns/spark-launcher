@@ -20,11 +20,11 @@ def timestamp():
 
 
 def config_path():
-    return Path(os.environ.get("SPARK_CONFIG", Path.home() / ".config/spark/config.json")).expanduser()
+    return Path(os.environ.get("SPARKY_CONFIG", Path.home() / ".config/sparky/client.json")).expanduser()
 
 
 def state_dir():
-    return Path(os.environ.get("SPARK_STATE_DIR", Path.home() / ".local/state/spark")).expanduser()
+    return Path(os.environ.get("SPARKY_STATE_DIR", Path.home() / ".local/state/sparky")).expanduser()
 
 
 def atomic_write(path, data, mode=0o600):
@@ -75,7 +75,7 @@ def load_config():
     try:
         return validate_config(json.loads(config_path().read_text()))
     except FileNotFoundError:
-        raise SparkError("Run spark init --gateway https://your-spark:8443 first.") from None
+        raise SparkError("Run sparky init --gateway https://your-spark:8443 first.") from None
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -115,7 +115,8 @@ def make_catalog(config, wire):
         context = row.get("context_length", 0)
         if not isinstance(context, int) or context <= 0:
             continue
-        model = {**config["models"].get(model_id, {}), "id": model_id, "context_tokens": context}
+        model = {k: row[k] for k in ("name", "aliases", "output_tokens", "inputs", "reasoning", "nodes") if k in row}
+        model.update(id=model_id, context_tokens=context)
         model.setdefault("name", row.get("name") or model_id.removeprefix(prefix))
         if model.get("output_tokens", 0) >= context:
             raise SparkError(f"Output budget exceeds the live context for {model_id}.")
@@ -127,7 +128,7 @@ def make_catalog(config, wire):
         if isinstance(advertised, int) and advertised > 0:
             minimum = min(minimum, advertised)
         model_id = auto["id"]
-        models.append({**config["models"].get(model_id, {}), "id": model_id,
+        models.append({**{k:auto[k] for k in ("name","aliases","output_tokens","inputs") if k in auto}, "id": model_id,
                        "context_tokens": minimum, "context_source": "minimum routed model context"})
         models[-1].setdefault("name", "Spark Auto")
         if models[-1].get("output_tokens", 0) >= minimum:
@@ -144,11 +145,8 @@ def fetch_catalog(config, offline=False):
         catalog = json.loads(path.read_text())
         if catalog["gateway"] != config["gateway"]:
             raise SparkError("Cached catalog belongs to another gateway.")
-        # Keep aliases and labels current even with explicitly cached context metadata.
-        for model in catalog["models"]:
-            model.update(config["models"].get(model["id"], {}))
         return catalog
-    catalog = make_catalog(config, request_json(config["gateway"] + "/v1/models"))
+    catalog = make_catalog(config, request_json(config["gateway"] + "/sparky/catalog"))
     write_json(path, catalog)
     return catalog
 
@@ -158,7 +156,7 @@ def resolve(catalog, name):
                (m["id"], m["id"].split("/", 1)[-1], *m.get("aliases", []))]
     if len(matches) != 1:
         reason = "Ambiguous model alias" if matches else "Unknown model"
-        raise SparkError(f"{reason}: {name}. Run spark models.")
+        raise SparkError(f"{reason}: {name}. Run sparky models.")
     return matches[0]
 
 

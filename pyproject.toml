@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spark-launcher"
-version = "0.1.0"
+version = "0.2.0"
 description = "One Spark model catalog for Claude Code, Hermes, Codex, and OpenCode"
 requires-python = ">=3.11"
-dependencies = ["ruamel.yaml>=0.18.17,<0.19"]
+dependencies = ["ruamel.yaml>=0.18.17,<0.19", "PyYAML>=6.0.2,<7"]
 license = "MIT"
 
 [project.scripts]
-spark = "spark_launcher.cli:main"
+sparky = "spark_launcher.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

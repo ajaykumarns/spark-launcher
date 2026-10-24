@@ -9,4 +9,4 @@ with tempfile.TemporaryDirectory() as temp:
     shutil.copytree(root / "src/spark_launcher", stage / "spark_launcher", ignore=shutil.ignore_patterns("__pycache__"))
     (stage / "__main__.py").write_text('from spark_launcher.cli import main\nmain()\n')
     (root / "dist").mkdir(exist_ok=True)
-    zipapp.create_archive(stage, root / "dist/spark-node.pyz", interpreter="/usr/bin/env python3")
+    zipapp.create_archive(stage, root / "dist/sparky.pyz", interpreter="/usr/bin/env python3")

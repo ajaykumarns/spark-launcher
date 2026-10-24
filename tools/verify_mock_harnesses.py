@@ -99,7 +99,7 @@ try:
                 "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--json", "Reply SPARK_MOCK_OK"]
             result = subprocess.run([plan["binary"], *plan["args"], *extra], cwd=temp,
                                     env=env, capture_output=True, text=True, timeout=90)
-            calls = [r for r in received if r["client"] == "spark/" + harness]
+            calls = [r for r in received if r["client"] == "sparky/" + harness]
             success = result.returncode == 0 and "SPARK_MOCK_OK" in result.stdout
             results[harness] = {"passed": success, "exit_code": result.returncode, "requests": calls, "all_requests": list(received)}
             if not success or not calls:

@@ -31,7 +31,7 @@ def build_plan(config, catalog, model, harness, project, session):
             "environment_overrides": {}, "environment_unset": [], "model": model,
             "project": str(Path(project).expanduser().resolve()), "session": session}
     env = plan["environment_overrides"]
-    headers = {"X-Client-ID": "spark/" + harness, "X-Session-ID": session}
+    headers = {"X-Client-ID": "sparky/" + harness, "X-Session-ID": session}
     if harness == "claude":
         env.update({"ANTHROPIC_BASE_URL": origin + "/anthropic", "ANTHROPIC_AUTH_TOKEN": "spark-keyless",
                     "ANTHROPIC_MODEL": mid, "ANTHROPIC_CUSTOM_MODEL_OPTION": mid,
@@ -110,7 +110,7 @@ def sync_hermes(config, catalog, session):
                          "models": {m["id"]: {"context_length": m["context_tokens"],
                                    "timeout_seconds": config["timeout_seconds"],
                                    "stale_timeout_seconds": config["timeout_seconds"]} for m in catalog["models"]}})
-        provider.setdefault("extra_headers", {})["X-Client-ID"] = "spark/hermes"
+        provider.setdefault("extra_headers", {})["X-Client-ID"] = "sparky/hermes"
         buffer = io.StringIO()
         yaml.dump(document, buffer)
         encoded = buffer.getvalue().encode()
@@ -169,7 +169,7 @@ def child_env(plan):
 def check_passthrough(harness, extra):
     for index, arg in enumerate(extra):
         if arg in ("--model", "-m", "--provider", "--oss", "--local-provider") or arg.startswith(("--model=", "--provider=", "-m=", "--local-provider=")):
-            raise SparkError("Select the model and provider through spark.")
+            raise SparkError("Select the model and provider through sparky.")
         if harness == "codex":
             value = None
             if arg in ("-c", "--config") and index + 1 < len(extra):
@@ -182,7 +182,7 @@ def check_passthrough(harness, extra):
                 key = value.split("=", 1)[0].strip().strip('"')
                 if key in ("model", "model_provider", "model_context_window", "model_catalog_json",
                            "model_auto_compact_token_limit") or key.startswith("model_providers"):
-                    raise SparkError("Set Codex model routing and context through spark.")
+                    raise SparkError("Set Codex model routing and context through sparky.")
 
 
 def prepare(config, catalog, plan):
@@ -200,7 +200,7 @@ def launch(config, catalog, plan, extra):
               "catalog_fetched_at": catalog["fetched_at"], "project": plan["project"], "started_at": timestamp()}
     path = state_dir() / "launches" / (plan["session"] + ".json")
     write_json(path, record)
-    print(f'Spark: {plan["harness"]} · {record["model"]} · {record["context"]} tokens', file=__import__("sys").stderr)
+    print(f'Sparky: {plan["harness"]} · {record["model"]} · {record["context"]} tokens', file=__import__("sys").stderr)
     code = 1
     try:
         code = subprocess.call([plan["binary"], *plan["args"], *extra], cwd=plan["project"], env=child_env(plan))

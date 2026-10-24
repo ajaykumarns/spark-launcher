@@ -1,0 +1,699 @@
+{
+  "version": 1,
+  "root": "/home/spark-user/spark-cluster",
+  "controller_port": 8020,
+  "manager_url": "http://192.0.2.10:8000",
+  "policy": {
+    "interrupt_active_jobs": false,
+    "idle_ttl_seconds": 10800,
+    "comfyui_exclusive_with_llms": true,
+    "protected_models": [
+      "parakeet"
+    ]
+  },
+  "nodes": {
+    "spark01": {
+      "ssh": "spark01",
+      "direct_ip": "198.51.100.10",
+      "tailscale_ip": "192.0.2.10",
+      "comfy_url": "http://192.0.2.10:8188",
+      "comfy_root": "/home/spark-user/image-gen/ComfyUI",
+      "comfy_unit": "spark-imagegen.service",
+      "units": {
+        "qwen3.8-flash-next": [
+          "garuda-extra@qwen3.8-flash-next.service",
+          "sparky-qwen-dual.service"
+        ],
+        "glm-5.3-flash": [
+          "garuda-extra@glm-5.3-flash.service"
+        ],
+        "nemotron-3.5-super": [
+          "garuda-extra@nemotron-3.5-super.service"
+        ],
+        "deepseek-v4.1-flash-1017": [
+          "garuda-extra@deepseek-v4.1-flash-1017.service"
+        ],
+        "qwen3.8-27b": [
+          "garuda-vllm.service"
+        ],
+        "mimo-v2.6-flash": [
+          "garuda-mimo.service"
+        ]
+      },
+      "containers": [
+        "garuda-nemotron-3.5-super",
+        "garuda-diction-adapter",
+        "garuda-gateway",
+        "garuda-inference"
+      ],
+      "asset_roots": [
+        "/home/spark-user/spark-cluster/models",
+        "/home/spark-user/image-gen/ComfyUI/models"
+      ]
+    },
+    "spark02": {
+      "ssh": "spark02",
+      "direct_ip": "198.51.100.11",
+      "tailscale_ip": "192.0.2.11",
+      "comfy_url": "http://192.0.2.11:8188",
+      "comfy_root": "/home/spark-user/image-gen/ComfyUI",
+      "comfy_unit": "spark-imagegen.service",
+      "units": {
+        "qwen3.8-flash-next": [
+          "garuda-extra@qwen3.8-flash-next.service",
+          "sparky-qwen-dual.service"
+        ],
+        "glm-5.3-flash": [
+          "garuda-extra@glm-5.3-flash.service"
+        ],
+        "nemotron-3.5-super": [
+          "garuda-extra@nemotron-3.5-super.service"
+        ],
+        "deepseek-v4.1-flash-1017": [
+          "garuda-extra@deepseek-v4.1-flash-1017.service"
+        ],
+        "qwen3.8-27b": [
+          "garuda-vllm.service"
+        ],
+        "mimo-v2.6-flash": [
+          "garuda-mimo.service"
+        ]
+      },
+      "containers": [
+        "garuda-qwen3.8-flash-next",
+        "whisper-api",
+        "parakeet-gateway",
+        "parakeet-engine"
+      ],
+      "asset_roots": [
+        "/home/spark-user/spark-cluster/models",
+        "/home/spark-user/image-gen/ComfyUI/models"
+      ]
+    }
+  },
+  "models": {
+    "qwen3.8-flash-next": {
+      "kind": "llm",
+      "name": "Qwen3.8 Flash Next NVIDIA (spark02)",
+      "aliases": [
+        "qwen"
+      ],
+      "run_on": "spark02",
+      "keep_loaded": false,
+      "output_tokens": 16384,
+      "inputs": [
+        "text"
+      ],
+      "reasoning": false,
+      "settings": {
+        "spark01": {
+          "units": {
+            "spark01": "garuda-extra@qwen3.8-flash-next.service"
+          },
+          "backend_url": "http://127.0.0.1:8001",
+          "context_tokens": 262144,
+          "concurrency": 4,
+          "weights": {
+            "spark01": [
+              "/home/spark-user/spark-cluster/models/qwen3.8-flash-next-fp4-local"
+            ]
+          },
+          "minimum_available_gib": {},
+          "recipe_validation": "existing_verified_service",
+          "parameters": {
+            "max_sequences": 8,
+            "gpu_memory_utilization": 0.8
+          },
+          "parameter_bindings": {
+            "spark01": [
+              {
+                "path": "/home/spark-user/spark-cluster/extra/nvidia-recipes/qwen3.8-flash-next.json",
+                "format": "nvidia_json",
+                "fields": {
+                  "context_tokens": "--max-model-len",
+                  "max_sequences": "--max-num-seqs",
+                  "gpu_memory_utilization": "--gpu-memory-utilization"
+                }
+              }
+            ]
+          }
+        },
+        "spark02": {
+          "units": {
+            "spark02": "garuda-extra@qwen3.8-flash-next.service"
+          },
+          "backend_url": "http://198.51.100.11:8001",
+          "context_tokens": 262144,
+          "concurrency": 4,
+          "weights": {
+            "spark02": [
+              "/home/spark-user/spark-cluster/models/qwen3.8-flash-next-fp4-local"
+            ]
+          },
+          "minimum_available_gib": {},
+          "recipe_validation": "existing_verified_service",
+          "parameters": {
+            "max_sequences": 4,
+            "gpu_memory_utilization": 0.75
+          },
+          "parameter_bindings": {
+            "spark02": [
+              {
+                "path": "/home/spark-user/spark-cluster/extra/nvidia-recipes/qwen3.8-flash-next.json",
+                "format": "nvidia_json",
+                "fields": {
+                  "context_tokens": "--max-model-len",
+                  "max_sequences": "--max-num-seqs",
+                  "gpu_memory_utilization": "--gpu-memory-utilization"
+                }
+              },
+              {
+                "path": "/home/spark-user/spark-cluster/extra/serve-qwen-worker.py",
+                "format": "python",
+                "fields": {
+                  "context_tokens": "--max-model-len",
+                  "max_sequences": "--max-num-seqs",
+                  "gpu_memory_utilization": "--gpu-memory-utilization"
+                }
+              }
+            ]
+          }
+        },
+        "both": {
+          "units": {
+            "spark01": "sparky-qwen-dual.service",
+            "spark02": "sparky-qwen-dual.service"
+          },
+          "backend_url": "http://127.0.0.1:8001",
+          "context_tokens": 262144,
+          "concurrency": 4,
+          "weights": {
+            "spark01": [
+              "/home/spark-user/spark-cluster/models/qwen3.8-flash-next-fp4-local"
+            ],
+            "spark02": [
+              "/home/spark-user/spark-cluster/models/qwen3.8-flash-next-fp4-local"
+            ]
+          },
+          "minimum_available_gib": {
+            "spark01": 110,
+            "spark02": 110
+          },
+          "recipe_validation": "prepared_not_live_tested",
+          "parameters": {
+            "max_sequences": 4,
+            "gpu_memory_utilization": 0.75
+          },
+          "parameter_bindings": {
+            "spark01": [
+              {
+                "path": "/home/spark-user/spark-cluster/extra/nvidia-recipes/qwen3.8-flash-next-dual.json",
+                "format": "nvidia_json",
+                "fields": {
+                  "context_tokens": "--max-model-len",
+                  "max_sequences": "--max-num-seqs",
+                  "gpu_memory_utilization": "--gpu-memory-utilization"
+                }
+              }
+            ],
+            "spark02": [
+              {
+                "path": "/home/spark-user/spark-cluster/extra/nvidia-recipes/qwen3.8-flash-next-dual.json",
+                "format": "nvidia_json",
+                "fields": {
+                  "context_tokens": "--max-model-len",
+                  "max_sequences": "--max-num-seqs",
+                  "gpu_memory_utilization": "--gpu-memory-utilization"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "glm-5.3-flash": {
+      "kind": "llm",
+      "name": "GLM 5.3 Flash NVIDIA (two Sparks)",
+      "aliases": [
+        "glm"
+      ],
+      "run_on": "both",
+      "keep_loaded": false,
+      "output_tokens": 16384,
+      "inputs": [
+        "text"
+      ],
+      "reasoning": false,
+      "settings": {
+        "both": {
+          "units": {
+            "spark01": "garuda-extra@glm-5.3-flash.service",
+            "spark02": "garuda-extra@glm-5.3-flash.service"
+          },
+          "backend_url": "http://127.0.0.1:8001",
+          "context_tokens": 500000,
+          "concurrency": 4,
+          "weights": {
+            "spark01": [
+              "/home/spark-user/spark-cluster/models/glm-5.3-flash-fp4-local"
+            ],
+            "spark02": [
+              "/home/spark-user/spark-cluster/models/glm-5.3-flash-fp4-local"
+            ]
+          },
+          "minimum_available_gib": {},
+          "recipe_validation": "existing_verified_service",
+          "parameters": {
+            "max_sequences": 4,
+            "gpu_memory_utilization": 0.8
+          },
+          "parameter_bindings": {
+            "spark01": [
+              {
+                "path": "/home/spark-user/spark-cluster/extra/nvidia-recipes/glm-5.3-flash.json",
+                "format": "nvidia_json",
+                "fields": {
+                  "context_tokens": "--max-model-len",
+                  "max_sequences": "--max-num-seqs",
+                  "gpu_memory_utilization": "--gpu-memory-utilization"
+                }
+              }
+            ],
+            "spark02": [
+              {
+                "path": "/home/spark-user/spark-cluster/extra/nvidia-recipes/glm-5.3-flash.json",
+                "format": "nvidia_json",
+                "fields": {
+                  "context_tokens": "--max-model-len",
+                  "max_sequences": "--max-num-seqs",
+                  "gpu_memory_utilization": "--gpu-memory-utilization"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "nemotron-3.5-super": {
+      "kind": "llm",
+      "name": "Nemotron 3.5 Super VL NVIDIA (spark01)",
+      "aliases": [
+        "nemotron"
+      ],
+      "run_on": "spark01",
+      "keep_loaded": false,
+      "output_tokens": 16384,
+      "inputs": [
+        "text",
+        "image"
+      ],
+      "reasoning": true,
+      "settings": {
+        "spark01": {
+          "units": {
+            "spark01": "garuda-extra@nemotron-3.5-super.service"
+          },
+          "backend_url": "http://127.0.0.1:8001",
+          "context_tokens": 524288,
+          "concurrency": 4,
+          "weights": {
+            "spark01": [
+              "/home/spark-user/spark-cluster/models/nemotron-3.5-super-vl-nvfp4",
+              "/home/spark-user/spark-cluster/models/nemotron-3.5-super-vl-lilicorr"
+            ]
+          },
+          "minimum_available_gib": {},
+          "recipe_validation": "existing_verified_service",
+          "parameters": {
+            "max_sequences": 1,
+            "gpu_memory_utilization": 0.75
+          },
+          "parameter_bindings": {
+            "spark01": [
+              {
+                "path": "/home/spark-user/spark-cluster/model-expansion-20261023/serve-nemotron.py",
+                "format": "python",
+                "fields": {
+                  "context_tokens": "--max-model-len",
+                  "max_sequences": "--max-num-seqs",
+                  "gpu_memory_utilization": "--gpu-memory-utilization"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "deepseek-v4.1-flash-1017": {
+      "kind": "llm",
+      "name": "DeepSeek V4.1 Flash 1017 TensorFold (2 Sparks)",
+      "aliases": [
+        "deepseek"
+      ],
+      "run_on": "both",
+      "keep_loaded": false,
+      "output_tokens": 16384,
+      "inputs": [
+        "text",
+        "image"
+      ],
+      "reasoning": true,
+      "settings": {
+        "both": {
+          "units": {
+            "spark01": "garuda-extra@deepseek-v4.1-flash-1017.service",
+            "spark02": "garuda-extra@deepseek-v4.1-flash-1017.service"
+          },
+          "backend_url": "http://127.0.0.1:8001",
+          "context_tokens": 262144,
+          "concurrency": 4,
+          "weights": {
+            "spark01": [
+              "/home/spark-user/spark-cluster/models/deepseek-v4.1-flash-1017-tensorfold"
+            ],
+            "spark02": [
+              "/home/spark-user/spark-cluster/models/deepseek-v4.1-flash-1017-tensorfold"
+            ]
+          },
+          "minimum_available_gib": {},
+          "recipe_validation": "existing_verified_service",
+          "parameters": {
+            "max_sequences": 4,
+            "mtp_drafts": 5
+          },
+          "parameter_bindings": {
+            "spark01": [
+              {
+                "path": "/home/spark-user/spark-cluster/model-expansion-20261023/start-tensorfold.sh",
+                "format": "command",
+                "fields": {
+                  "context_tokens": "--context",
+                  "max_sequences": "--parallel",
+                  "mtp_drafts": "--mtp-drafts"
+                }
+              }
+            ],
+            "spark02": [
+              {
+                "path": "/home/spark-user/spark-cluster/model-expansion-20261023/start-tensorfold.sh",
+                "format": "command",
+                "fields": {
+                  "context_tokens": "--context",
+                  "max_sequences": "--parallel",
+                  "mtp_drafts": "--mtp-drafts"
+                }
+              }
+            ]
+          },
+          "startup_order": [
+            "spark01",
+            "spark02"
+          ],
+          "rendezvous": {
+            "node": "spark01",
+            "port": 29551
+          }
+        }
+      }
+    },
+    "qwen3.8-27b": {
+      "kind": "llm",
+      "name": "Qwen3.8 27B (2 Sparks)",
+      "aliases": [
+        "qwen27b"
+      ],
+      "run_on": "both",
+      "keep_loaded": false,
+      "output_tokens": 16384,
+      "inputs": [
+        "text"
+      ],
+      "reasoning": false,
+      "settings": {
+        "both": {
+          "units": {
+            "spark01": "garuda-vllm.service",
+            "spark02": "garuda-vllm.service"
+          },
+          "backend_url": "http://127.0.0.1:8001",
+          "context_tokens": 262144,
+          "concurrency": 4,
+          "weights": {
+            "spark01": [
+              "/home/spark-user/spark-cluster/models/qwen3.8-27b-nvfp4",
+              "/home/spark-user/spark-cluster/models/qwen3.8-27b-dflash2"
+            ],
+            "spark02": [
+              "/home/spark-user/spark-cluster/models/qwen3.8-27b-nvfp4",
+              "/home/spark-user/spark-cluster/models/qwen3.8-27b-dflash2"
+            ]
+          },
+          "minimum_available_gib": {},
+          "recipe_validation": "existing_verified_service",
+          "parameters": {
+            "max_sequences": 1,
+            "gpu_memory_utilization": 0.65
+          },
+          "parameter_bindings": {
+            "spark01": [
+              {
+                "path": "/home/spark-user/spark-cluster/vllm/context-qwen3.8-27b.conf",
+                "format": "env",
+                "fields": {
+                  "context_tokens": "max_model_len",
+                  "max_sequences": "max_num_seqs"
+                }
+              },
+              {
+                "path": "/home/spark-user/spark-cluster/vllm/serve.sh",
+                "format": "command",
+                "fields": {
+                  "gpu_memory_utilization": "--gpu-memory-utilization"
+                }
+              }
+            ],
+            "spark02": [
+              {
+                "path": "/home/spark-user/spark-cluster/vllm/context-qwen3.8-27b.conf",
+                "format": "env",
+                "fields": {
+                  "context_tokens": "max_model_len",
+                  "max_sequences": "max_num_seqs"
+                }
+              },
+              {
+                "path": "/home/spark-user/spark-cluster/vllm/serve.sh",
+                "format": "command",
+                "fields": {
+                  "gpu_memory_utilization": "--gpu-memory-utilization"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "mimo-v2.6-flash": {
+      "kind": "llm",
+      "name": "MiMo V2.6 Flash (2 Sparks)",
+      "aliases": [
+        "mimo"
+      ],
+      "run_on": "both",
+      "keep_loaded": false,
+      "output_tokens": 16384,
+      "inputs": [
+        "text",
+        "image"
+      ],
+      "reasoning": true,
+      "settings": {
+        "both": {
+          "units": {
+            "spark01": "garuda-mimo.service",
+            "spark02": "garuda-mimo.service"
+          },
+          "backend_url": "http://127.0.0.1:8001",
+          "context_tokens": 262144,
+          "concurrency": 4,
+          "weights": {
+            "spark01": [
+              "/home/spark-user/spark-cluster/models/mimo-v2.6-flash"
+            ],
+            "spark02": [
+              "/home/spark-user/spark-cluster/models/mimo-v2.6-flash"
+            ]
+          },
+          "minimum_available_gib": {},
+          "recipe_validation": "existing_verified_service",
+          "parameters": {
+            "max_sequences": 2,
+            "gpu_memory_utilization": 0.88
+          },
+          "parameter_bindings": {
+            "spark01": [
+              {
+                "path": "/home/spark-user/spark-cluster/mimo/start-local.sh",
+                "format": "docker_env",
+                "fields": {
+                  "context_tokens": "CONTEXT_LENGTH",
+                  "max_sequences": "MAX_RUNNING_REQUESTS",
+                  "gpu_memory_utilization": "MEM_FRACTION_STATIC"
+                }
+              }
+            ],
+            "spark02": [
+              {
+                "path": "/home/spark-user/spark-cluster/mimo/start-local.sh",
+                "format": "docker_env",
+                "fields": {
+                  "context_tokens": "CONTEXT_LENGTH",
+                  "max_sequences": "MAX_RUNNING_REQUESTS",
+                  "gpu_memory_utilization": "MEM_FRACTION_STATIC"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "parakeet": {
+      "kind": "audio",
+      "name": "Parakeet transcription",
+      "aliases": [
+        "parakeet-en"
+      ],
+      "run_on": "spark02",
+      "keep_loaded": true,
+      "settings": {
+        "spark02": {
+          "containers": [
+            "parakeet-engine",
+            "parakeet-gateway"
+          ],
+          "backend_url": "https://spark02.example.net",
+          "weights": {
+            "spark02": [
+              "/opt/parakeet-stt/models"
+            ]
+          }
+        }
+      }
+    },
+    "whisper": {
+      "kind": "audio",
+      "name": "Whisper (installed, stopped)",
+      "aliases": [],
+      "run_on": "spark02",
+      "keep_loaded": false,
+      "settings": {
+        "spark02": {
+          "containers": [
+            "whisper-api"
+          ],
+          "enabled": false,
+          "reason": "Whisper is intentionally stopped. No safe automatic unload adapter is enabled."
+        }
+      }
+    },
+    "comfyui": {
+      "kind": "comfyui",
+      "name": "ComfyUI image and video workflows",
+      "aliases": [],
+      "run_on": "spark01",
+      "keep_loaded": false,
+      "settings": {
+        "spark01": {
+          "backend_url": "http://192.0.2.10:8188",
+          "unit": "spark-imagegen.service"
+        },
+        "spark02": {
+          "backend_url": "http://192.0.2.11:8188",
+          "unit": "spark-imagegen.service"
+        }
+      },
+      "keep_running": true
+    },
+    "z-image-turbo": {
+      "kind": "comfy_model",
+      "name": "z-image-turbo",
+      "aliases": [],
+      "run_on": "spark01",
+      "keep_loaded": false,
+      "engine": "comfyui",
+      "settings": {
+        "spark01": {
+          "backend_url": "http://192.0.2.10:8188",
+          "weights": {
+            "spark01": [
+              "/home/spark-user/image-gen/ComfyUI/models/diffusion_models/z_image_turbo_bf16.safetensors"
+            ]
+          }
+        },
+        "spark02": {
+          "backend_url": "http://192.0.2.11:8188",
+          "weights": {
+            "spark02": [
+              "/home/spark-user/image-gen/ComfyUI/models/diffusion_models/z_image_turbo_bf16.safetensors"
+            ]
+          }
+        }
+      }
+    },
+    "flux2-klein-4b": {
+      "kind": "comfy_model",
+      "name": "flux2-klein-4b",
+      "aliases": [],
+      "run_on": "spark01",
+      "keep_loaded": false,
+      "engine": "comfyui",
+      "settings": {
+        "spark01": {
+          "backend_url": "http://192.0.2.10:8188",
+          "weights": {
+            "spark01": [
+              "/home/spark-user/image-gen/ComfyUI/models/diffusion_models/flux-2-klein-4b-fp8.safetensors"
+            ]
+          }
+        },
+        "spark02": {
+          "backend_url": "http://192.0.2.11:8188",
+          "weights": {
+            "spark02": [
+              "/home/spark-user/image-gen/ComfyUI/models/diffusion_models/flux-2-klein-4b-fp8.safetensors"
+            ]
+          }
+        }
+      }
+    },
+    "qwen-image-2.1-turbo": {
+      "kind": "comfy_model",
+      "name": "qwen-image-2.1-turbo",
+      "aliases": [],
+      "run_on": "spark02",
+      "keep_loaded": false,
+      "engine": "comfyui",
+      "settings": {
+        "spark02": {
+          "backend_url": "http://192.0.2.11:8188",
+          "weights": {
+            "spark02": [
+              "/home/spark-user/image-gen/ComfyUI/models/diffusion_models/qwen_image_2.1_turbo_int8_convrot.safetensors"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "auto": {
+    "targets": [
+      "qwen3.8-flash-next",
+      "glm-5.3-flash",
+      "qwen3.8-27b",
+      "mimo-v2.6-flash",
+      "nemotron-3.5-super",
+      "deepseek-v4.1-flash-1017"
+    ],
+    "default": "deepseek-v4.1-flash-1017"
+  }
+}

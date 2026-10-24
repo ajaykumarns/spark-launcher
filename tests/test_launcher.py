@@ -20,14 +20,14 @@ class LauncherTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.env = patch.dict(os.environ, {"SPARK_STATE_DIR": str(self.root / "state"),
+        self.env = patch.dict(os.environ, {"SPARKY_STATE_DIR": str(self.root / "state"),
                                           "HERMES_HOME": str(self.root / "hermes")})
         self.env.start()
         self.c = validate_config({"version": 1, "gateway": "https://spark.example:8443",
                                   "default_model": "garuda/test", "models": {
                                       "garuda/test": {"aliases": ["test"], "name": "Test", "output_tokens": 100}}})
         self.c["binaries"] = {h: "/usr/bin/true" for h in ("claude", "hermes", "codex", "opencode")}
-        self.wire = {"data": [{"id": "garuda/test", "context_length": 20000},
+        self.wire = {"data": [{"id": "garuda/test", "context_length": 20000, "aliases": ["test"], "output_tokens":100},
                               {"id": "garuda/second", "context_length": 30000},
                               {"id": "garuda/router"}, {"id": "parakeet/en", "context_length": 500},
                               {"id": "garuda/spark-auto"}]}
@@ -49,7 +49,7 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(len(catalog["models"]), 3)
         codex = build_plan(self.c, catalog, model, "codex", self.root, "test")
         self.assertIn("model_context_window=77000", codex["args"])
-        self.assertIn('model_providers.spark.http_headers.X-Client-ID="spark/codex"', codex["args"])
+        self.assertIn('model_providers.spark.http_headers.X-Client-ID="sparky/codex"', codex["args"])
         self.assertIn('review_model="garuda/test"', codex["args"])
         opencode = build_plan(self.c, catalog, model, "opencode", self.root, "test")
         raw = json.loads(opencode["environment_overrides"]["OPENCODE_CONFIG_CONTENT"])
@@ -74,7 +74,7 @@ class LauncherTests(unittest.TestCase):
             resolve(catalog, "same")
         with self.assertRaises(SparkError):
             resolve(catalog, "missing")
-        self.c["models"]["garuda/test"]["output_tokens"] = 99999
+        self.wire["data"][0]["output_tokens"] = 99999
         with self.assertRaises(SparkError):
             make_catalog(self.c, self.wire)
 
@@ -208,25 +208,6 @@ location /api/ { auth_basic restricted; }
         self.assertFalse(flags["embedding"])
         self.assertTrue(flags["future_option"])
 
-
-    def test_status_does_not_return_process_command_or_credentials(self):
-        from spark_launcher.control import node_manager
-        response = {"running": [{"model": "test", "state": "ready", "ttl": 10800,
-                                  "cmd": "process --api-key do-not-print", "credential": "do-not-print"}]}
-        with patch("spark_launcher.control.read_env", return_value={"VLLM_API_KEY": "private"}), \
-             patch("spark_launcher.control.request_json", return_value=response), \
-             patch("spark_launcher.control.subprocess.run", side_effect=OSError):
-            data = node_manager("/home/test/spark-cluster", "http://127.0.0.1:8000", "status")
-        self.assertEqual(data, {"running": [{"model": "test", "state": "ready", "ttl": 10800}]})
-
-    def test_legacy_opencode_model_maps_to_launcher(self):
-        from spark_launcher.cli import run
-        with patch("spark_launcher.cli.load_config", return_value=self.c), \
-             patch("spark_launcher.cli.fetch_catalog", return_value=self.cat), \
-             patch("spark_launcher.cli.launch", return_value=0) as start:
-            self.assertEqual(run(["legacy-opencode", "--model", "garuda/test", "--continue"]), 0)
-            self.assertEqual(start.call_args.args[2]["model"]["id"], "garuda/test")
-            self.assertEqual(start.call_args.args[3], ["--continue"])
 
     def test_http_discovery_against_real_socket(self):
         wire = self.wire

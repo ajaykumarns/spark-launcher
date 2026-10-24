@@ -4,13 +4,13 @@ import subprocess
 from pathlib import Path
 from spark_launcher.catalog import state_dir, write_json
 
-spark = str(Path.home() / '.local/bin/spark')
+spark = str(Path.home() / '.local/bin/sparky')
 commands = {
     'claude': [spark, 'claude', '--model', 'nemotron', '--', '--version'],
     'hermes': [spark, 'hermes', '--model', 'glm', '--', '--help'],
     'codex': [spark, 'codex', '--model', 'deepseek', '--', '--version'],
-    'opencode': [str(Path.home() / '.local/bin/opencode-spark'), '--model', 'garuda/qwen3.8-flash-next', '--version'],
-    'legacy-model-list': [str(Path.home() / '.local/bin/spark-models'), 'list', '--json'],
+    'opencode': [spark, 'opencode', '--model', 'qwen', '--', '--version'],
+    'model-list': [spark, 'models', '--json'],
 }
 results = {}
 for name, args in commands.items():
