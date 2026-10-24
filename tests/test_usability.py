@@ -241,6 +241,31 @@ class UsabilityTests(unittest.TestCase):
             with self.assertRaisesRegex(SparkError, '^parakeet must stay loaded.$'):
                 run_remote_json(['ssh', 'host'])
 
+    def test_remote_failures_distinguish_transport_from_helper_errors(self):
+        from unittest.mock import MagicMock
+        cases = (
+            (255, 'Connection timed out PRIVATE', 'timed out'),
+            (255, 'Permission denied PRIVATE', 'authentication failed'),
+            (255, 'Host key verification failed PRIVATE', 'verify the device identity'),
+            (255, 'Connection reset by peer PRIVATE', 'connection closed'),
+            (255, 'Connection refused PRIVATE', 'refused'),
+            (255, 'Could not resolve hostname PRIVATE', 'configured device address'),
+            (255, 'PRIVATE', 'exit 255'),
+            (1, 'Traceback PRIVATE', 'device command failed'),
+            (127, 'command not found PRIVATE', 'device command failed'),
+            (255, 'PRIVATE https://login.tailscale.com/a/abc123', 'identity check'),
+        )
+        for code, diagnostic, expected in cases:
+            with self.subTest(code=code, expected=expected):
+                process = MagicMock()
+                process.returncode = code
+                process.communicate.return_value = ('', diagnostic)
+                process.__enter__.return_value = process
+                with patch('spark_launcher.control.subprocess.Popen', return_value=process):
+                    with self.assertRaisesRegex(SparkError, expected) as error:
+                        run_remote_json(['ssh', 'host'])
+                self.assertNotIn('PRIVATE', str(error.exception))
+
     def test_identity_check_is_shown_before_long_load_timeout(self):
         from unittest.mock import MagicMock
         process = MagicMock()

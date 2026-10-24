@@ -44,6 +44,36 @@ def identity_check_message(stderr):
     return None
 
 
+def remote_failure_message(code, stderr):
+    """Explain known failures without exposing arbitrary remote diagnostics."""
+    check = identity_check_message(stderr)
+    if check:
+        return check
+    if code != 255:
+        return (f'The device command failed (exit {code}). The '
+                'device did not return an error report. Run sparky doctor to check the installation.')
+    detail = (stderr or '').lower()
+    reasons = (
+        (('host key verification failed', 'remote host identification has changed'),
+         'SSH could not verify the device identity. Check its host key before changing known_hosts.'),
+        (('permission denied', 'authentication failed'),
+         'SSH authentication failed. Run sparky admin ssh spark01 to check your access.'),
+        (('connection timed out', 'operation timed out', 'no route to host', 'network is unreachable'),
+         'The SSH connection timed out or the device is unreachable. Check Tailscale and the device network.'),
+        (('connection refused',),
+         'The device refused the SSH connection. Check that its SSH service is running.'),
+        (('could not resolve hostname', 'name or service not known'),
+         'SSH could not find the configured device address. Check the SSH host alias.'),
+        (('connection reset', 'connection closed', 'broken pipe'),
+         'The SSH connection closed before the device returned data. Run the command again.'),
+    )
+    for patterns, message in reasons:
+        if any(pattern in detail for pattern in patterns):
+            return message
+    return ('The SSH connection failed (exit 255). Run sparky admin ssh spark01 '
+            'to see the connection details.')
+
+
 def run_remote_json(command, *, payload=None, timeout=90):
     """Read the private SSH protocol without printing its JSON or diagnostics.
 
@@ -80,11 +110,7 @@ def run_remote_json(command, *, payload=None, timeout=90):
     if code:
         if isinstance(data, dict) and isinstance(data.get('error'), str):
             raise SparkError(data['error'])
-        message = identity_check_message(stderr)
-        if message:
-            raise SparkError(message)
-        raise SparkError('SSH access failed. Run sparky admin ssh spark01 to check access. ' +
-                         'Check that both Sparks are online in Tailscale.')
+        raise SparkError(remote_failure_message(code, stderr))
     if not isinstance(data, dict):
         raise SparkError('The device returned invalid data. Update sparky on both Sparks.')
     return data
