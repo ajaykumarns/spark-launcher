@@ -76,7 +76,7 @@ class UsabilityTests(unittest.TestCase):
 
     def test_all_public_data_commands_have_human_and_machine_output(self):
         cases = [(['models'], 'CONTEXT'), (['models', 'qwen'], 'Model ID:'),
-                 (['models', '--installed'], 'INSTALLED MODEL'), (['status'], 'AVAILABLE RAM'),
+                 (['models', '--installed'], 'Installed models'), (['status'], 'AVAILABLE RAM'),
                  (['devices'], 'Free disk:'), (['plan', 'load', 'deepseek'], 'No services were changed.'),
                  (['config', 'show'], 'Authoritative file'), (['config', 'show', 'qwen'], 'Selected placement:'),
                  (['config', 'validate'], 'Configuration is valid.'),
@@ -122,7 +122,8 @@ class UsabilityTests(unittest.TestCase):
         text = table(('PLACEMENT', 'CONTEXT', 'REQUEST SLOTS', 'ENGINE SEQUENCES', 'GPU BUDGET'),
                      [('spark02', '262,144', '4', '4', '75%')], width=30)
         self.assertTrue(all(len(line) <= 30 for line in text.splitlines()))
-        self.assertIn('PLACEMENT: spark02', text)
+        self.assertIn('PLACEMENT:', text)
+        self.assertIn('spark02', text)
 
 
     def test_invalid_central_file_has_location_and_recovery_command(self):

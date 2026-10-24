@@ -25,6 +25,9 @@ class UsageError(SparkError):
 
 
 class Parser(argparse.ArgumentParser):
+    def format_help(self):
+        return view.help_view(super().format_help())
+
     def error(self, message):
         if message.startswith('argument COMMAND: invalid choice:'):
             invalid = re.search(r'invalid choice: ([^ ]+)', message)
@@ -36,9 +39,11 @@ class Parser(argparse.ArgumentParser):
         raise UsageError(message.rstrip('.') + f'. Run {self.prog} --help for usage.')
 
 
-def json_option(command):
+def common_output_options(command):
     command.add_argument('--json', action='store_true', default=argparse.SUPPRESS,
                          help='Print one JSON result for scripts')
+    command.add_argument('--color', choices=('auto', 'always', 'never'), default=argparse.SUPPRESS,
+                         help='Terminal colors; default: auto')
 
 
 def parser():
@@ -51,11 +56,12 @@ def parser():
                       '  sparky claude --model qwen -- --continue')
     p.add_argument('--version', action='version', version='sparky ' + __version__)
     p.add_argument('--json', action='store_true', help='Print JSON; also accepted after a command')
+    p.add_argument('--color', choices=('auto', 'always', 'never'), default='auto', help='Terminal colors; default: auto')
     sub = p.add_subparsers(dest='command', title='Commands', metavar='COMMAND')
 
     def command(name, help_text):
         child = sub.add_parser(name, help=help_text, description=help_text)
-        json_option(child)
+        common_output_options(child)
         return child
 
     command('status', 'Show available memory, running models, and queued work')
@@ -82,7 +88,7 @@ def parser():
     placement.add_argument('model', help='Installed model name or alias')
     placement.add_argument('on', choices=('spark01', 'spark02', 'both'))
     for child in (show, validate, placement):
-        json_option(child)
+        common_output_options(child)
 
     workflow = command('run', 'Submit a ComfyUI API workflow; execution may wait for a device')
     workflow.add_argument('engine', choices=('comfyui',))
@@ -116,7 +122,7 @@ def parser():
     ssh = admin_sub.add_parser('ssh', help='Open an interactive administrator shell')
     ssh.add_argument('target', nargs='?', default='spark01', choices=('spark01', 'spark02'))
     setup = admin_sub.add_parser('enable-harnesses', help='Configure gateway protocol routes with backups')
-    json_option(setup)
+    common_output_options(setup)
     # Node commands form the private machine protocol. Their output stays JSON.
     node = sub.add_parser('node', help='Internal node protocol; not needed for normal use')
     node_sub = node.add_subparsers(dest='action', required=True, metavar='ACTION')
@@ -172,7 +178,7 @@ def initialize(args):
               'remote_root': args.remote_root, 'admin_url': args.admin_url}
     write_json(config_path(), validate_config(config))
     result = {'status': 'created', 'path': str(config_path())}
-    emit(result, lambda d: f"Client configuration created: {d['path']}\nRun sparky models to check gateway access.", args.json)
+    emit(result, lambda d: view.notice("Client configured", f"Client configuration created: {d['path']}\nRun sparky models to check gateway access."), args.json)
 
 
 def node_action(args):
@@ -281,6 +287,7 @@ def doctor(config, harness=None):
 
 def run(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    view.configure_from_args(argv)
     p = parser()
     if not argv:
         p.print_help()
@@ -387,8 +394,8 @@ def run(argv=None):
         catalog = fetch_catalog(config)
         backup = sync_hermes(config, catalog, uuid.uuid4().hex)
         data = {'status': 'updated' if backup else 'current', 'backup': backup, 'models': len(catalog['models'])}
-        emit(data, lambda d: 'Hermes Spark provider is current. Unrelated providers were kept.' +
-             (f"\nPrivate backup: {d['backup']}" if d['backup'] else ''), args.json)
+        emit(data, lambda d: view.notice('Hermes settings', 'Hermes Spark provider is current. Unrelated providers were kept.' +
+             (f"\nPrivate backup: {d['backup']}" if d['backup'] else '')), args.json)
         return 0
     if args.command == 'doctor':
         data = doctor(config, args.harness)
@@ -401,9 +408,9 @@ def run(argv=None):
         if args.json:
             output({'url': url})
         elif webbrowser.open(url):
-            print('Opened gateway UI: ' + url)
+            print(view.notice('Gateway UI', 'Opened gateway UI: ' + url))
         else:
-            print('Open this gateway UI URL in your browser: ' + url)
+            print(view.notice('Gateway UI', 'Open this gateway UI URL in your browser: ' + url))
         return 0
     if args.command == 'admin':
         if args.action == 'ssh':
@@ -431,7 +438,7 @@ def main():
         if as_json:
             print(json.dumps({'error': message, 'code': 130}), file=sys.stderr)
         else:
-            print('sparky: ' + message, file=sys.stderr)
+            print(view.notice('Interrupted', message, 'yellow', stream=sys.stderr), file=sys.stderr)
         code = 130
     except (SparkError, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
         code = 2 if isinstance(error, UsageError) else 1
@@ -447,5 +454,5 @@ def main():
             stream = sys.stdout if command_words and command_words[0] == 'node' else sys.stderr
             print(json.dumps({'error': message, 'code': code}), file=stream)
         else:
-            print('sparky: ' + view.clean(message), file=sys.stderr)
+            print(view.notice('sparky: error', message, 'red', stream=sys.stderr), file=sys.stderr)
     raise SystemExit(code or 0)

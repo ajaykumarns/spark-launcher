@@ -10,7 +10,7 @@ sparky codex --model deepseek --project ~/dev/project
 sparky opencode --model qwen
 ```
 
-Running `sparky` without arguments shows help. Normal commands print tables or short messages. Every public data command accepts `--json` for scripts. You can put it before or after the command. Nested configuration commands also accept it at the end.
+Running `sparky` without arguments shows help. Normal commands use bordered tables, clear section headings, and separate detail cards. Running states are green. Stopped states are dim. Warnings are yellow and errors are red. State labels remain visible without color. Colors are automatic in a terminal and disabled in redirected output. Use `--color always` to force them, or `--color never` to disable them. `NO_COLOR` is respected in automatic mode. Very narrow terminals use cards. Every public data command accepts `--json` for scripts. You can put it before or after the command. Nested configuration commands also accept it at the end.
 
 ```sh
 sparky status                       # What is running and how much RAM is available
@@ -129,13 +129,13 @@ The controller binds loopback for gateway and administrator operations. Its dire
 
 ## Install and verify
 
-Python 3.11 or later is required. The client uses `ruamel.yaml` to preserve Hermes comments. The controller uses the existing PyYAML installation to validate native manager configuration.
+Python 3.11 or later is required. The client uses Rich for terminal tables and colors. The node archive includes the terminal renderer, so it needs no new system packages. The client uses `ruamel.yaml` to preserve Hermes comments. The controller uses the existing PyYAML installation to validate native manager configuration.
 
 ```sh
 uv tool install .
 sparky --help
 make test
-make node-helper
+uv run make node-helper
 ```
 
 Copy `dist/sparky.pyz` to `~/.local/bin/sparky` on both Sparks. Stage the cluster configuration on Spark 1. The explicit node installer creates the controller service and ComfyUI guards. It waits for image queues to drain before it restarts each ComfyUI service. It preserves running LLM and Parakeet containers. It keeps private backups of changed server files.

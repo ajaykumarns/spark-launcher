@@ -53,3 +53,9 @@ Live verification uses read-only commands, existing model metadata, local launch
 The private `node` protocol still uses JSON. Public commands consume that protocol and render a human result. Native harnesses retain their own UI and output modes. Their configuration formats are not replaced.
 
 This is a command-line review. No claim is made that a GUI, every terminal emulator, or every screen-reader combination was physically tested. Source recipe changes do not count as a live test of a new model placement.
+
+## Visual correction
+
+The first review treated aligned text as a finished terminal interface. It was not enough. Version 0.4.0 uses Rich bordered tables, section headings, detail cards, and state colors. Running states are bright green. Stopped states are dim. Warnings and errors have their own colors and explicit text.
+
+The display was rendered and inspected with live status data at 80 and 100 columns. Automated checks cover 60, 80, 100, and 120 columns, interactive color, redirected text, NO_COLOR, explicit color settings, and JSON isolation. Model IDs stay intact in the tables. Very narrow terminals use labeled cards. The node artifact bundles the renderer. No host package or service change is needed.

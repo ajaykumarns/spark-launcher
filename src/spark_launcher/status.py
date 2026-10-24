@@ -1,7 +1,7 @@
 """Short terminal view of the controller status. No device operations."""
 
 
-from .presentation import table, memory
+from .presentation import table, memory, heading, note
 
 def format_status(data):
     devices = []
@@ -25,18 +25,19 @@ def format_status(data):
                        ", ".join(state.get("nodes", [])) or "-", str(active)))
     admission = data.get("admission", {})
     waiting = admission.get("waiting", [])
-    lines = [table(("DEVICE", "AVAILABLE RAM", "TOTAL RAM", "COMFYUI"), devices), "",
-             table(("MODEL / AUDIO", "STATE", "LOADED ON", "LLM CALLS"), models), ""]
+    lines = [table(("DEVICE", "AVAILABLE RAM", "TOTAL RAM", "COMFYUI"), devices, title="Devices"), "",
+             table(("MODEL / AUDIO", "STATE", "LOADED ON", "LLM CALLS"), models, title="Models and audio"), ""]
+    lines.insert(0, heading("Spark cluster status") + "\n")
     if waiting:
-        lines.append("Waiting: " + ", ".join(item["workload"] for item in waiting))
+        lines.append(note("Waiting: " + ", ".join(item["workload"] for item in waiting), "yellow"))
     else:
         lines.append("Device requests waiting: 0.")
     if admission.get("config_transition"):
-        lines.append("New work is paused for a configuration change.")
+        lines.append(note("New work is paused for a configuration change.", "yellow"))
     protected = [name for name, state in data.get("models", {}).items() if state.get("keep_loaded")]
     if protected:
-        lines.append("Kept loaded: " + ", ".join(protected) + ".")
+        lines.append(note("Kept loaded: " + ", ".join(protected) + ".", "green"))
     if data.get("activity_known") is False:
-        lines.append("Active LLM call counts are unavailable.")
-    lines.append("Use sparky status --json for full details.")
+        lines.append(note("Active LLM call counts are unavailable.", "yellow"))
+    lines.append(note("Use sparky status --json for full details."))
     return "\n".join(lines)

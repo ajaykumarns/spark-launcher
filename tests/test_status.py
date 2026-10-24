@@ -45,7 +45,7 @@ class StatusTests(unittest.TestCase):
         self.assertNotIn('large-inventory-should-not-print', text)
         self.assertNotIn('checkpoint', text)
         self.assertNotIn('"memory_bytes"', text)
-        self.assertLess(len(text.splitlines()), 20)
+        self.assertLess(len(text.splitlines()), 35)
 
     def test_explicit_json_keeps_full_status_for_scripts(self):
         with patch('spark_launcher.cli.load_config', return_value={}), \
