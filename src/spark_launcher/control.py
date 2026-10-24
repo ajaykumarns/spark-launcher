@@ -34,6 +34,17 @@ def remote(config, action, model=None):
     return subprocess.call(remote_command(config, action, model))
 
 
+def remote_status(config):
+    result = subprocess.run(remote_command(config, "status"), stdout=subprocess.PIPE,
+                            text=True, timeout=90)
+    if result.returncode:
+        raise SparkError("Cannot read status over SSH. Check the SSH message above.")
+    try:
+        return json.loads(result.stdout)
+    except ValueError:
+        raise SparkError("The device returned invalid status data.") from None
+
+
 def admin_ssh(config, target):
     host = safe_host(config.get("admin_ssh_host"))
     if target == "spark01":

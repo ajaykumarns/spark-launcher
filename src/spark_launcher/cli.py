@@ -12,9 +12,9 @@ from pathlib import Path
 
 from . import __version__
 from .adapters import HARNESSES, build_plan, check_passthrough, executable, launch, prepare, sync_hermes
-from .catalog import (SparkError, config_path, fetch_catalog, import_models, load_config,
+from .catalog import (SparkError, config_path, fetch_catalog, load_config,
                       resolve, state_dir, validate_config, write_json)
-from .control import admin_ssh, devices, node_device, node_resources, remote
+from .control import admin_ssh, devices, node_device, node_resources, remote, remote_status
 
 
 def output(value):
@@ -48,7 +48,9 @@ def parser():
     sub.add_parser("sync", help="Refresh Hermes's owned Spark provider")
     child = sub.add_parser("doctor", help="Check discovery and installed commands; no inference")
     child.add_argument("harness", nargs="?", choices=HARNESSES)
-    for cmd in ("status", "devices", "logs", "ui"):
+    status = sub.add_parser("status", help="Show device memory, model state, and queued work")
+    status.add_argument("--json", action="store_true", help="Show full status data for scripts")
+    for cmd in ("devices", "logs", "ui"):
         sub.add_parser(cmd)
     for cmd in ("load", "unload"):
         sub.add_parser(cmd).add_argument("model")
@@ -110,30 +112,19 @@ def initialize(args):
     print("Created", config_path())
 
 
-def menu(config):
-    if not sys.stdin.isatty():
-        raise SparkError("Use sparky HARNESS --model NAME, or run sparky in a terminal.")
-    catalog = fetch_catalog(config)
-    print("Harness: 1 Claude Code  2 Hermes  3 Codex  4 OpenCode")
-    choice = int(input("Choose [1]: ") or "1")
-    if not 1 <= choice <= len(HARNESSES):
-        raise SparkError("Invalid harness choice.")
-    harness = HARNESSES[choice - 1]
-    for index, model in enumerate(catalog["models"], 1):
-        print(f'{index}  {model.get("name", model["id"])}  ({model["context_tokens"]} tokens)')
-    choice = int(input("Model: "))
-    if not 1 <= choice <= len(catalog["models"]):
-        raise SparkError("Invalid model choice.")
-    model = catalog["models"][choice - 1]
-    project = Path(input(f"Project [{Path.cwd()}]: ") or Path.cwd()).expanduser().resolve()
-    if not project.is_dir():
-        raise SparkError("Project must be a directory.")
-    plan = build_plan(config, catalog, model, harness, project, uuid.uuid4().hex)
-    return launch(config, catalog, plan, [])
+def show_status(data, as_json=False):
+    if as_json:
+        output(data)
+        return
+    from .status import format_status
+    print(format_status(data))
 
 
 def run(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        parser().print_help()
+        return 0
     if argv and argv[0] == "launch":
         argv = argv[1:]
         if not argv or argv[0] not in HARNESSES:
@@ -182,8 +173,6 @@ def run(argv=None):
             output(node_resources(args.root, args.action, getattr(args, "model", None)))
         return 0
     config = load_config()
-    if not args.command:
-        return menu(config)
     if args.command in HARNESSES:
         check_passthrough(args.command, extra)
         project = Path(args.project).expanduser().resolve()
@@ -210,7 +199,8 @@ def run(argv=None):
         # Workflow contents go over stdin, never process arguments or logs.
         return resource_rpc(config, "run", {"workflow": document, "on": args.on}, stdin_payload=True)
     if args.command == "models" and args.installed:
-        return remote(config, "status")
+        show_status(remote_status(config), args.json)
+        return 0
     if args.command in ("models", "sync", "doctor"):
         catalog = fetch_catalog(config, getattr(args, "offline", False))
         if args.command == "sync":
@@ -231,7 +221,8 @@ def run(argv=None):
                 print(f'{model["id"]:42} {model["context_tokens"]:10d} {model.get("output_tokens", 0):8d} {",".join(model.get("aliases", []))}')
         return 0
     if args.command == "status":
-        return remote(config, "status")
+        show_status(remote_status(config), args.json)
+        return 0
     if args.command == "devices":
         return devices(config)
     if args.command == "admin" and args.action == "ssh":

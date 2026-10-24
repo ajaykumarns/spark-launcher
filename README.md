@@ -10,6 +10,8 @@ sparky codex --model deepseek --project ~/dev/project
 sparky opencode --model qwen
 ```
 
+Running `sparky` without arguments shows help. `sparky status` shows a short table of device memory, loaded models, and queued work. Use `sparky status --json` for full machine-readable details.
+
 ## Central configuration
 
 The authoritative model file lives on Spark 1:
