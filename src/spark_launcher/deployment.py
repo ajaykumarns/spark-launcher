@@ -200,7 +200,8 @@ def connect_gateway(config,backup):
     }
 '''
     if '# sparky: authoritative read-only model catalog' not in text:
-        anchors=['listen 192.0.2.10:8080;','listen 127.0.0.1:8082 proxy_protocol;']
+        anchors=['listen '+config['nodes']['spark01']['tailscale_ip']+':8080;',
+                 'listen 127.0.0.1:8082 proxy_protocol;']
         for anchor in anchors:
             if text.count(anchor)!=1:raise SparkError('Unrecognized inference listener layout. Gateway was not changed.')
             text=text.replace(anchor,anchor+'\n'+location,1)

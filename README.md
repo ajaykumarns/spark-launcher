@@ -69,7 +69,7 @@ The policy field `idle_ttl_seconds` controls the manager idle timeout. ComfyUI G
 
 Each LLM has a `run_on` value: `spark01`, `spark02`, or `both`. Its `settings` contain the supported placements. Each placement specifies its nodes, systemd units, model context, backend address, startup memory check, and numeric runtime parameters. A two-device placement runs one distributed model. It does not create two independent copies. The prepared Qwen two-device recipe needs a separate runtime load test before its performance can be claimed.
 
-Use [cluster.example.json](cluster.example.json) as the current site example. Paths and device addresses must match the site. Edit the file on Spark 1. Spark 1 derives service ownership from the model placements and sends each read-only probe over the direct link. Copied service lists do not control model detection. The small node files on Spark 2 support the ComfyUI service guard. They are not another model authority.
+Use [cluster.example.json](cluster.example.json) as a generic site example. Its `spark-user` account, example domain, and documentation IP addresses are placeholders. Replace them with your site values before installation. Keep the real configuration outside the repository. Edit the file on Spark 1. Spark 1 derives service ownership from the model placements and sends each read-only probe over the direct link. Copied service lists do not control model detection. The small node files on Spark 2 support the ComfyUI service guard. They are not another model authority.
 
 ```sh
 sparky config show

@@ -31,7 +31,7 @@ Client installation and controller activation are separate steps. Replacing an a
 
 ## Activation check on 2026-10-24
 
-The server core from commit `4ae0ac2` (0.6.0) was activated after the controller became idle. The client-only OpenCode correction from `576ac2f` (0.6.1) was installed on the Mac. No second controller restart was needed for that client change.
+The server core (0.6.0) was activated after the controller became idle. The client-only OpenCode correction (0.6.1) was installed on the Mac. No second controller restart was needed for that client change.
 
 Bounded keyless HTTPS calls to the already loaded Qwen and Nemotron models passed through the updated controller. Each call generated at most 16 tokens. These calls verified transport and routing, not answer quality.
 

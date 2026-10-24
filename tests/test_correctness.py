@@ -192,6 +192,7 @@ class CorrectnessTests(unittest.TestCase):
         from spark_launcher.deployment import connect_gateway
         gateway=self.root/'gateway';(gateway/'data').mkdir(parents=True)
         (gateway/'gateway.env').write_text('BIFROST_ADMIN_USER=test\nBIFROST_ADMIN_PASSWORD=fixture-only\n')
+        self.config['nodes']['spark01']['tailscale_ip']='192.0.2.10'
         original='listen 192.0.2.10:8080;\nlisten 127.0.0.1:8082 proxy_protocol;\n'
         nginx=gateway/'nginx.conf';nginx.write_text(original)
         before={'network_config':{'base_url':'http://127.0.0.1:8000'}}

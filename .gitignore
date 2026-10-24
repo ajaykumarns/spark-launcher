@@ -6,3 +6,10 @@ build/
 dist/
 .env
 config.json
+
+# Private site settings and local credential files
+client.json
+models.json
+cluster.json
+.env.*
+*.env
