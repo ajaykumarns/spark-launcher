@@ -278,8 +278,12 @@ class CorrectnessTests(unittest.TestCase):
         model={'id':'garuda/test','context_tokens':20000}
         plan=build_plan(c,{'models':[model]},model,'opencode',self.root,'test')
         original={'provider':{'other':{'name':'Keep'}},'mcp':{'local':{'command':['tool']}},'enabled_providers':['other']}
-        with patch.dict(os.environ,{'OPENCODE_CONFIG_CONTENT':json.dumps(original)}):
-            child=json.loads(child_env(plan)['OPENCODE_CONFIG_CONTENT'])
+        custom=self.root/'opencode.json'
+        custom.write_text('{"mcp":{"custom":{"enabled":false,"command":["tool"],"type":"local"}}}')
+        with patch.dict(os.environ,{'OPENCODE_CONFIG_CONTENT':json.dumps(original),'OPENCODE_CONFIG':str(custom)}):
+            env=child_env(plan)
+            child=json.loads(env['OPENCODE_CONFIG_CONTENT'])
+        self.assertEqual(env['OPENCODE_CONFIG'],str(custom))
         self.assertEqual(child['mcp'],original['mcp']);self.assertEqual(child['provider']['other'],original['provider']['other'])
         self.assertEqual(child['enabled_providers'],['other','spark'])
 

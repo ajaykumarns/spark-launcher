@@ -24,7 +24,7 @@ The review covered every source module, support tool, test and configuration exa
 | Audit failure | A SQLite error after lease release could cause a second HTTP error response. Release now remains complete without replacing the response. |
 | Process locks | A crash left existence-only locks that blocked future commands. OS file locks now release on process exit. Their inode stays in place to prevent waiter races. |
 | Gateway rollback | A failed provider restore prevented file restores. Interrupted setup could skip rollback. Every restore is now attempted independently. Incomplete recovery is reported. |
-| Harness settings | OpenCode discarded unrelated process providers and MCP settings. Compact model flags and review overrides could bypass routing. Process settings now merge. Extra routing flags are checked. Native prompt delimiters are respected. |
+| Harness settings | OpenCode discarded unrelated process providers and MCP settings. Compact model flags and review overrides could bypass routing. Process settings now merge. A custom OpenCode configuration-file path remains in the child environment. Extra routing flags are checked. Native prompt delimiters are respected. |
 | Results | New Hermes settings could report current instead of updated. Child signal exits could produce invalid shell codes. Both results are corrected. |
 | Packaging | The lock still described 0.1.0 and omitted dependencies. YAML relied on host installation. The lock is current. The archive includes portable YAML and excludes native extensions. |
 | Installer | A staged root could differ from the installed root. Dual-recipe edits could silently miss flags. Both conditions now fail before service changes. |

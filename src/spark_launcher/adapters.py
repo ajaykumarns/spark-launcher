@@ -70,11 +70,10 @@ def build_plan(config, catalog, model, harness, project, session):
                 "toolcall": True, "reasoning": item.get("reasoning", False),
                 "modalities": {"input": item.get("inputs") or ["text"], "output": ["text"]}}
         selected = "spark/" + mid.removeprefix(prefix)
-        raw = {"provider": {"spark": {"npm": "@ai-sdk/openai-compatible",
+        raw = {"enabled_providers": ["spark"], "provider": {"spark": {"npm": "@ai-sdk/openai-compatible",
                "name": "Spark Gateway", "options": {"baseURL": origin + "/v1", "apiKey": "spark-keyless",
                "timeout": timeout, "headers": headers}, "models": models}}, "model": selected, "small_model": selected}
         env["OPENCODE_CONFIG_CONTENT"] = json.dumps(raw)
-        plan["environment_unset"] = ["OPENCODE_CONFIG"]
         plan["args"] = ["--model", selected]
     else:
         plan["args"] = ["--provider", "spark-gateway", "--model", mid]
@@ -167,10 +166,11 @@ def child_env(plan):
         if not isinstance(original,dict) or not isinstance(original.get('provider',{}),dict):
             raise SparkError('OpenCode process settings and provider must be mappings.')
         owned=json.loads(env['OPENCODE_CONFIG_CONTENT'])
+        enabled=original.get('enabled_providers')
         original.setdefault('provider',{}).update(owned.pop('provider'))
         original.update(owned)
-        if isinstance(original.get('enabled_providers'),list) and 'spark' not in original['enabled_providers']:
-            original['enabled_providers'].append('spark')
+        if isinstance(enabled,list):
+            original['enabled_providers']=list(dict.fromkeys([*enabled,'spark']))
         env['OPENCODE_CONFIG_CONTENT']=json.dumps(original)
     return env
 

@@ -1,4 +1,4 @@
-# Validation for Sparky 0.6.0
+# Validation for Sparky 0.6
 
 The [correctness review](correctness-review.md) records the findings and removals. This report replaces the obsolete 0.1.0 instructions.
 
