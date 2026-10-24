@@ -28,3 +28,13 @@ The node archive also passed with Python site packages disabled. It includes Ric
 Synthetic replies prove transport and configuration, not model quality. Recipe checks do not prove a fresh load, a new context limit, a new placement or peak GPU memory use. The review kept current model settings and assets.
 
 Client installation and controller activation are separate steps. Replacing an archive does not update modules already loaded in a controller process. Controller activation must wait for active calls and image work to finish. Model and audio processes can remain loaded.
+
+## Activation check on 2026-10-24
+
+The server core from commit `4ae0ac2` (0.6.0) was activated after the controller became idle. The client-only OpenCode correction from `576ac2f` (0.6.1) was installed on the Mac. No second controller restart was needed for that client change.
+
+Bounded keyless HTTPS calls to the already loaded Qwen and Nemotron models passed through the updated controller. Each call generated at most 16 tokens. These calls verified transport and routing, not answer quality.
+
+Before and after snapshots showed equal container IDs, start times, model runtime files, manager settings and ComfyUI process identities. Only the controller process changed. Parakeet remained loaded. Whisper remained stopped. Nemotron stayed at 524288 context tokens. Qwen stayed at 262144. Gateway administrator authentication still rejected unauthenticated requests.
+
+The final regression suite passed 107 tests. A native OpenCode check also preserved a custom configuration file and its disabled MCP entry while selecting the Spark model.
