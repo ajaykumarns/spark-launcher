@@ -104,6 +104,8 @@ def format_config(data):
                   f"Selected placement: {model['run_on']}",
                   f"Aliases: {', '.join(map(clean, model.get('aliases', []))) or 'none'}",
                   'Keep loaded: ' + ('yes' if model.get('keep_loaded') else 'no')]
+        if model.get('monitoring', {}).get('containers'):
+            lines.append('Memory containers: ' + ', '.join(model['monitoring']['containers']))
         rows = []
         for placement, setting in model['settings'].items():
             parameters = setting.get('parameters', {})

@@ -59,3 +59,9 @@ This is a command-line review. No claim is made that a GUI, every terminal emula
 The first review treated aligned text as a finished terminal interface. It was not enough. Version 0.4.0 uses Rich bordered tables, section headings, detail cards, and state colors. Running states are bright green. Stopped states are dim. Warnings and errors have their own colors and explicit text.
 
 The display was rendered and inspected with live status data at 80 and 100 columns. Automated checks cover 60, 80, 100, and 120 columns, interactive color, redirected text, NO_COLOR, explicit color settings, and JSON isolation. Model IDs stay intact in the tables. Very narrow terminals use labeled cards. The node artifact bundles the renderer. No host package or service change is needed.
+
+## Memory and context status
+
+Version 0.5.0 replaces the LLM call-count column with per-Spark memory tables. Running models show their backend context limit, NVIDIA per-process GPU allocation, and host PSS. Exact cgroup ownership combines each model's launcher and container child processes. Parakeet, ComfyUI, other containers, and other host processes are included. GPU and host observations remain separate because this hardware uses shared physical memory. Failed readings are unknown. Configured context fallbacks are labeled.
+
+The probe is read-only and runs through existing admin SSH/sudo access. It does not restart the resource controller or model services. Monitoring container names are metadata in the central model file. Model placement and runtime settings remain unchanged.

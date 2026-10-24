@@ -229,6 +229,11 @@
             ]
           }
         }
+      },
+      "monitoring": {
+        "containers": [
+          "garuda-qwen3.8-flash-next"
+        ]
       }
     },
     "glm-5.3-flash": {
@@ -292,6 +297,11 @@
             ]
           }
         }
+      },
+      "monitoring": {
+        "containers": [
+          "garuda-glm-5.3-flash"
+        ]
       }
     },
     "nemotron-3.5-super": {
@@ -342,6 +352,11 @@
             ]
           }
         }
+      },
+      "monitoring": {
+        "containers": [
+          "garuda-nemotron-3.5-super"
+        ]
       }
     },
     "deepseek-v4.1-flash-1017": {
@@ -414,6 +429,11 @@
             "port": 29551
           }
         }
+      },
+      "monitoring": {
+        "containers": [
+          "garuda-deepseek-v4.1-flash-1017"
+        ]
       }
     },
     "qwen3.8-27b": {
@@ -491,6 +511,11 @@
             ]
           }
         }
+      },
+      "monitoring": {
+        "containers": [
+          "garuda-vllm"
+        ]
       }
     },
     "mimo-v2.6-flash": {
@@ -555,6 +580,11 @@
             ]
           }
         }
+      },
+      "monitoring": {
+        "containers": [
+          "garuda-mimo-v2.6-flash"
+        ]
       }
     },
     "parakeet": {

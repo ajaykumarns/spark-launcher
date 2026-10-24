@@ -61,7 +61,7 @@ class StatusTests(unittest.TestCase):
         self.data['admission']['config_transition'] = True
         text = format_status(self.data)
         self.assertIn('unknown', text)
-        self.assertIn('Active LLM call counts are unavailable.', text)
+        self.assertNotIn('LLM CALLS', text)
         self.assertIn('New work is paused', text)
 
 

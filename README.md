@@ -26,6 +26,12 @@ sparky logs --limit 5               # Local harness launch history
 sparky doctor                       # Check every installed harness and the gateway
 ```
 
+`sparky status` groups running workloads by Spark. Each row shows the context limit, measured GPU allocation, and host RAM. Host RAM uses proportional resident memory (PSS), which divides shared pages among their processes. GPU memory includes weights and allocated context caches. These are observations of shared physical RAM and can overlap. Do not add the two columns.
+
+The status probe reads NVIDIA per-process allocations, process memory summaries, exact container identities, and systemd cgroups. It includes Parakeet, ComfyUI, other containers, and other host processes. Missing measurements show `unknown`. Context comes from the running backend when it publishes a limit. A `*` marks a configured fallback. The LLM calls column is omitted. Full byte counts and sources remain in `status --json`.
+
+LLM container identities for measurement are declared in each model's `monitoring.containers` list in the central file. This metadata does not change placement, model limits, or startup recipes. Sampling uses the existing administrator SSH and sudo access. It does not create a monitor service or change the running engines.
+
 A configured route is not proof that a model is loaded. Use `status` for actual running placement. `models --installed` describes installed image weights as **on demand**. Their memory residency is not inferred from files on disk.
 
 Long model operations print progress to stderr. They finish active work before a device changes. A load prints the idle models it needs to unload. ComfyUI submission returns a job ID; it does not claim that execution has finished. Pressing Ctrl+C stops the local wait. Remote work may still continue. Check `sparky status` before another operation.

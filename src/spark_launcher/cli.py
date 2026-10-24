@@ -127,6 +127,7 @@ def parser():
     node = sub.add_parser('node', help='Internal node protocol; not needed for normal use')
     node_sub = node.add_subparsers(dest='action', required=True, metavar='ACTION')
     node_sub.add_parser('device')
+    node_sub.add_parser('memory')
     install = node_sub.add_parser('install')
     install.add_argument('--dir', required=True)
     for name in ('drain-comfy', 'probe', 'controller'):
@@ -233,6 +234,9 @@ def node_action(args):
             if recipe_state:
                 result['recipe_validation'] = recipe_state
         return result
+    if args.action == 'memory':
+        from .memory_usage import collect
+        return collect(json.loads(sys.stdin.read()))
     if args.action == 'device':
         return node_device()
     return node_resources(args.root, args.action, getattr(args, 'model', None))

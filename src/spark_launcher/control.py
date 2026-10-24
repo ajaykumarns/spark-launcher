@@ -187,7 +187,8 @@ def read_env(path):
 
 def node_resources(root, action, model=None):
     if action == 'status':
-        return controller_request(root, 'status')
+        from .memory_usage import enrich
+        return enrich(root, controller_request(root, 'status'))
     if action in ('load', 'unload'):
         from .resources import read_cluster, resolve_workload
         config = read_cluster(Path(root) / 'config/models.json')

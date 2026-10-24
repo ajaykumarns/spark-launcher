@@ -39,9 +39,9 @@ class TerminalTests(unittest.TestCase):
         self.assertIn('╰', text)
         self.assertIn('│', text)
         self.assertRegex(text, r'\x1b\[[0-9;]*92mready')
-        self.assertIn('\x1b[2mstopped', text)
+        self.assertIn('\x1b[2mStopped models:', text)
         self.assertIn('Spark cluster status', text)
-        self.assertIn('Models and audio', text)
+        self.assertIn('Running workloads', text)
 
     def test_redirected_output_keeps_borders_without_ansi(self):
         with contextlib.redirect_stdout(io.StringIO()):

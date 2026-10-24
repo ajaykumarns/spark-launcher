@@ -62,6 +62,9 @@ def validate_cluster(config):
             raise SparkError(f"{name} keep_loaded must be true or false.")
         if model.get("kind") not in KINDS:
             raise SparkError(f"Unknown workload kind: {name}.")
+        monitor = model.get("monitoring", {})
+        if not isinstance(monitor, dict) or not isinstance(monitor.get("containers", []), list) or any(not isinstance(value, str) for value in monitor.get("containers", [])):
+            raise SparkError(f"{name} monitoring containers must be a list of exact container names.")
         placement = model.get("run_on")
         if placement not in PLACEMENTS or placement not in model.get("settings", {}):
             raise SparkError(f"No settings for {name} on {placement}.")
