@@ -19,7 +19,7 @@ class ProfileTests(unittest.TestCase):
  def test_cli_exposes_explicit_plan(self):
   a=parser().parse_args(['image-profile','dedicated','--dry-run'])
   self.assertEqual(a.mode,'dedicated');self.assertTrue(a.dry_run)
- def transaction(self,fail_confirmation=False):
+ def transaction(self,fail_confirmation=False,low_memory=False):
   with tempfile.TemporaryDirectory() as temp:
    root=Path(temp);(root/'config').mkdir();path=root/'config/models.json';path.write_text('{"original":true}')
    original=path.read_bytes();cfg={'controller_port':8020,'nodes':{'spark02':{'ssh':'spark02','comfy_unit':'spark-imagegen.service','comfy_url':'http://worker:8188'}},'policy':{'comfyui_min_available_gib':21.5}}
@@ -36,19 +36,27 @@ class ProfileTests(unittest.TestCase):
      events.append(('set',dict(limits)))
      limits.update(dict(x.split('=',1) for x in words if x.startswith(('MemoryHigh=','MemoryMax=','MemorySwapMax='))))
     return types.SimpleNamespace(stdout='\n'.join(k+'='+v for k,v in limits.items()))
+   restarted=[]
+   def inspect(_):
+    n=snapshot()['nodes']['spark02']
+    if low_memory and not restarted:n['memory_bytes']['MemAvailable']=20*2**30
+    return n
    runtime=types.SimpleNamespace(snapshot=lambda *_:snapshot(),native_activity=lambda:{},
-     clear_comfy=lambda _:events.append(('clear',True)),inspect_node=lambda _:snapshot()['nodes']['spark02'])
+     clear_comfy=lambda _:events.append(('clear',True)),inspect_node=inspect,unit=lambda *args:restarted.append(args))
    with patch('spark_launcher.image_profiles.read_cluster',return_value=cfg),patch('spark_launcher.image_profiles.Runtime',return_value=runtime),patch('spark_launcher.image_profiles.request_json',side_effect=request),patch('spark_launcher.image_profiles.command',side_effect=command),patch('spark_launcher.image_profiles.write_cluster',side_effect=lambda p,d:p.write_text(json.dumps(d))):
     if fail_confirmation:
      with self.assertRaises(SparkError):activate(root,'dedicated')
      self.assertEqual(path.read_bytes(),original);self.assertEqual(limits,old)
     else:
-     result=activate(root,'dedicated');self.assertEqual(result['status'],'applied')
-     self.assertEqual(int(limits['MemoryMax']),48*2**30)
-     self.assertEqual(json.loads(path.read_text())['policy']['comfyui_min_available_gib'],96)
+     result=activate(root,'shared' if low_memory else 'dedicated');self.assertEqual(result['status'],'applied')
+     self.assertEqual(int(limits['MemoryMax']),(16 if low_memory else 48)*2**30)
+     self.assertEqual(result['image_service_restarted'],low_memory)
+     if low_memory:self.assertEqual(restarted,[('spark02','restart','spark-imagegen.service')])
+     self.assertEqual(json.loads(path.read_text())['policy']['comfyui_min_available_gib'],21.5 if low_memory else 96)
    self.assertEqual(events[0],('fence',True));self.assertEqual(events[-1],('fence',False))
    self.assertLess(next(i for i,x in enumerate(events) if x[0]=='clear'),next(i for i,x in enumerate(events) if x[0]=='set'))
  def test_applies_only_limits_after_idle_cache_release(self):self.transaction()
+ def test_low_shared_ram_restarts_only_idle_image_service(self):self.transaction(low_memory=True)
  def test_failed_confirmation_restores_limits_config_and_admission(self):self.transaction(True)
 
 if __name__=='__main__':unittest.main()

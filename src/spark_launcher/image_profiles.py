@@ -69,11 +69,27 @@ def activate(root, mode, dry_run=False):
         evaluate(config, rt.snapshot(True), mode)
         rt.clear_comfy('spark02')
         available = rt.inspect_node('spark02')['memory_bytes']['MemAvailable']
-        if available < planned['minimum_available_gib']*2**30:
-            raise SparkError('Available RAM is below the tested admission floor. The profile was kept.')
         old_limits = properties()
         wanted = {'MemoryHigh': planned['high_gib']*2**30, 'MemoryMax': planned['max_gib']*2**30, 'MemorySwapMax': 0}
+        restart_image = int(old_limits['MemoryMax']) > wanted['MemoryMax'] or available < planned['minimum_available_gib']*2**30
         changed = True; set_properties(wanted)
+        if restart_image:
+            state = rt.inspect_node('spark02')['comfyui']
+            if state.get('running') or state.get('pending'):
+                raise SparkError('Image work arrived during the change. Keep the existing profile.')
+            rt.unit('spark02', 'restart', unit)
+            planned['image_service_restarted'] = True
+            for _ in range(90):
+                try:
+                    request_json(config['nodes']['spark02']['comfy_url']+'/sparky/state', timeout=2)
+                    break
+                except SparkError:
+                    time.sleep(1)
+            else:
+                raise SparkError('The idle image service did not become ready.')
+            available = rt.inspect_node('spark02')['memory_bytes']['MemAvailable']
+        if available < planned['minimum_available_gib']*2**30:
+            raise SparkError('Available RAM is below the tested admission floor. The profile was kept.')
         if properties() != {k: str(v) for k, v in wanted.items()}:
             raise SparkError('The image service did not apply the requested memory limits.')
         if path.read_bytes() != original:
