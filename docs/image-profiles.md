@@ -24,6 +24,7 @@ It verifies the effective service limit through both systemd and the ComfyUI API
 It does not restart the language model.
 It restarts only idle ComfyUI when a lower memory limit or low available RAM requires it.
 This releases CUDA process state that model-cache cleanup cannot release.
+The recovery check includes a 0.5 GiB margin above the admission floor. The admission floor stays unchanged.
 These limits persist across service restarts and device restarts.
 
 The tested ComfyUI flags remain reserve-vram 12, cache-none, disable-pinned-memory, and disable-smart-memory.

@@ -71,7 +71,7 @@ def activate(root, mode, dry_run=False):
         available = rt.inspect_node('spark02')['memory_bytes']['MemAvailable']
         old_limits = properties()
         wanted = {'MemoryHigh': planned['high_gib']*2**30, 'MemoryMax': planned['max_gib']*2**30, 'MemorySwapMax': 0}
-        restart_image = int(old_limits['MemoryMax']) > wanted['MemoryMax'] or available < planned['minimum_available_gib']*2**30
+        restart_image = int(old_limits['MemoryMax']) > wanted['MemoryMax'] or available < (planned['minimum_available_gib']+.5)*2**30
         changed = True; set_properties(wanted)
         if restart_image:
             state = rt.inspect_node('spark02')['comfyui']

@@ -39,7 +39,7 @@ class ProfileTests(unittest.TestCase):
    restarted=[]
    def inspect(_):
     n=snapshot()['nodes']['spark02']
-    if low_memory and not restarted:n['memory_bytes']['MemAvailable']=20*2**30
+    if low_memory and not restarted:n['memory_bytes']['MemAvailable']=int((20 if low_memory is True else low_memory)*2**30)
     return n
    runtime=types.SimpleNamespace(snapshot=lambda *_:snapshot(),native_activity=lambda:{},
      clear_comfy=lambda _:events.append(('clear',True)),inspect_node=inspect,unit=lambda *args:restarted.append(args))
@@ -50,13 +50,14 @@ class ProfileTests(unittest.TestCase):
     else:
      result=activate(root,'shared' if low_memory else 'dedicated');self.assertEqual(result['status'],'applied')
      self.assertEqual(int(limits['MemoryMax']),(16 if low_memory else 48)*2**30)
-     self.assertEqual(result['image_service_restarted'],low_memory)
+     self.assertEqual(result['image_service_restarted'],bool(low_memory))
      if low_memory:self.assertEqual(restarted,[('spark02','restart','spark-imagegen.service')])
      self.assertEqual(json.loads(path.read_text())['policy']['comfyui_min_available_gib'],21.5 if low_memory else 96)
    self.assertEqual(events[0],('fence',True));self.assertEqual(events[-1],('fence',False))
    self.assertLess(next(i for i,x in enumerate(events) if x[0]=='clear'),next(i for i,x in enumerate(events) if x[0]=='set'))
  def test_applies_only_limits_after_idle_cache_release(self):self.transaction()
  def test_low_shared_ram_restarts_only_idle_image_service(self):self.transaction(low_memory=True)
+ def test_small_admission_margin_also_releases_idle_context(self):self.transaction(low_memory=21.7)
  def test_failed_confirmation_restores_limits_config_and_admission(self):self.transaction(True)
 
 if __name__=='__main__':unittest.main()
