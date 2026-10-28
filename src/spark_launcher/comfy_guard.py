@@ -4,6 +4,7 @@ import gc
 import weakref
 import json
 import os
+import sys
 import threading
 import time
 from pathlib import Path
@@ -18,7 +19,7 @@ CONFIG=json.loads(Path(os.environ['SPARKY_COMFY_CONFIG']).read_text())
 NODE=CONFIG['node']
 LOCK=threading.RLock()
 EXECUTORS=weakref.WeakSet()
-STATE={'phase':'idle','prompt_id':None,'executing':False,'version':1}
+STATE={'phase':'idle','prompt_id':None,'executing':False,'version':2}
 
 
 def rpc(path,data):
@@ -69,9 +70,30 @@ patch_executor(execution.PromptExecutor)
 routes=PromptServer.instance.routes
 
 
+def host_memory_snapshot(path=Path('/proc/meminfo')):
+    # ComfyUI system_stats RAM can be cgroup-limited. This is whole-host RAM.
+    try:
+        values={line.split(':')[0]:int(line.split()[1])*1024 for line in path.read_text().splitlines()
+                if line.split(':')[0] in ('MemTotal','MemAvailable')}
+        return values if set(values)=={'MemTotal','MemAvailable'} else None
+    except (OSError,ValueError,IndexError):return None
+
+
+def memory_profile(argv=None):
+    argv=sys.argv if argv is None else argv
+    try:reserve=float(argv[argv.index('--reserve-vram')+1])
+    except (ValueError,IndexError):reserve=None
+    return {'reserve_vram_gib':reserve,'cache_none':'--cache-none' in argv,
+            'disable_pinned_memory':'--disable-pinned-memory' in argv,
+            'disable_smart_memory':'--disable-smart-memory' in argv}
+
+
 @routes.get('/sparky/state')
 async def sparky_state(request):
-    with LOCK:return web.json_response({**STATE,'resident_models':len(getattr(memory,'current_loaded_models',[]))})
+    with LOCK:state={**STATE,'resident_models':len(getattr(memory,'current_loaded_models',[]))}
+    state['host_memory_bytes']=host_memory_snapshot()
+    state['memory_profile']=memory_profile()
+    return web.json_response(state)
 
 
 def local_operator(request):
