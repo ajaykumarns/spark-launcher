@@ -132,7 +132,7 @@ def remote_rpc(config, operation, payload):
     words = ['rpc', operation, '--root', root, '--payload', '-']
     command = ['ssh', '-o', 'ConnectTimeout=10', safe_host(config.get('admin_ssh_host')),
                '~/.local/bin/sparky --json node ' + shlex.join(words)]
-    timeout = 180 if operation == 'run' else 120
+    timeout = 900 if operation == 'image-profile' else (180 if operation == 'run' else 120)
     return run_remote_json(command, payload=json.dumps(payload), timeout=timeout)
 
 

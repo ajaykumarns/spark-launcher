@@ -79,6 +79,10 @@ def parser():
                         'Unload a model after its active work finishes')
         child.add_argument('model', help='Installed model name or alias; see sparky models')
 
+    image_profile = command('image-profile', 'Select tested shared or dedicated image memory limits')
+    image_profile.add_argument('mode', choices=('show', 'shared', 'dedicated'), nargs='?', default='show')
+    image_profile.add_argument('--dry-run', action='store_true')
+
     config = command('config', 'Inspect or change the central settings on Spark 1')
     config_sub = config.add_subparsers(dest='config_action', required=True, metavar='ACTION')
     show = config_sub.add_parser('show', help='Show all settings or one model')
@@ -134,7 +138,7 @@ def parser():
         node_sub.add_parser(name).add_argument('--file', required=True)
     node_sub.add_parser('render').add_argument('--payload', required=True)
     rpc = node_sub.add_parser('rpc')
-    rpc.add_argument('operation', choices=('plan', 'config', 'placement', 'run', 'validate'))
+    rpc.add_argument('operation', choices=('plan', 'config', 'placement', 'run', 'validate', 'image-profile'))
     rpc.add_argument('--root', required=True)
     rpc.add_argument('--payload', default='{}')
     for name in ('status', 'load', 'unload', 'gateway'):
@@ -202,6 +206,9 @@ def node_action(args):
         return probe(json.loads(sys.stdin.read() if args.file=='-' else Path(args.file).read_text()))
     if args.action == 'rpc':
         payload = json.loads(sys.stdin.read() if args.payload == '-' else args.payload)
+        if args.operation == 'image-profile':
+            from .image_profiles import activate
+            return activate(args.root, payload['mode'], payload.get('dry_run', False))
         if args.operation in ('config', 'validate'):
             document = controller_request(args.root, 'config')
             if args.operation == 'validate':
@@ -356,6 +363,10 @@ def run(argv=None):
     if args.command == 'plan':
         data = remote_rpc(config, 'plan', {'action': args.action, 'model': args.model, 'on': args.on})
         emit(data, view.format_plan, args.json)
+        return 0
+    if args.command == 'image-profile':
+        data = remote_rpc(config, 'image-profile', {'mode': args.mode, 'dry_run': args.dry_run})
+        emit(data, lambda d: view.format_result('image-profile', d), args.json)
         return 0
     if args.command == 'config':
         operation = {'show': 'config', 'validate': 'validate', 'placement': 'placement'}[args.config_action]
