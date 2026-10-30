@@ -36,7 +36,22 @@ def format_models(catalog, model=None):
              'Use sparky models NAME for details. Use sparky status for running models.']
     if catalog.get('offline'):
         lines.append(f"Cached data from {clean(catalog.get('fetched_at', 'unknown time'))}. Current server state was not checked.")
+    for service in catalog.get('audio_services', []):
+        lines += ['', format_speech_service(service)]
     return '\n'.join(lines)
+
+
+def format_speech_service(service):
+    return key_values('Speech generation', [
+        ('Model', service['model']), ('Default voice', service['default_voice']),
+        ('API base', service['api_base']),
+        ('Speech URL', service.get('speech_url', service['api_base'].rstrip('/') + '/audio/speech')),
+        ('Runs on', ', '.join(service.get('nodes', []))),
+        ('Device', service.get('device', 'unknown')),
+        ('API key', 'not required' if service.get('api_key_required') is False else 'see service settings'),
+        ('Voices', ', '.join(service.get('voices', []))),
+        ('Formats', ', '.join(service.get('formats', []))),
+    ])
 
 
 def format_inventory(data):
@@ -106,6 +121,9 @@ def format_config(data):
                   'Keep loaded: ' + ('yes' if model.get('keep_loaded') else 'no')]
         if model.get('monitoring', {}).get('containers'):
             lines.append('Memory containers: ' + ', '.join(model['monitoring']['containers']))
+        if model['kind'] == 'audio' and model.get('tts'):
+            lines.append(format_speech_service({**model['tts'], 'nodes': [model['run_on']]}))
+            return '\n'.join(lines)
         rows = []
         for placement, setting in model['settings'].items():
             parameters = setting.get('parameters', {})

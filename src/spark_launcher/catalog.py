@@ -171,8 +171,15 @@ def make_catalog(config, wire):
             raise SparkError("Auto output budget exceeds the shared context.")
     if not models:
         raise SparkError("No language models with usable context metadata were found.")
+    audio = wire.get('audio_services', [])
+    if not isinstance(audio, list) or any(not isinstance(s, dict) or s.get('kind') != 'tts'
+            or not isinstance(s.get('id'), str) or not isinstance(s.get('model'), str)
+            or not isinstance(s.get('api_base'), str) or not isinstance(s.get('default_voice'), str)
+            or not isinstance(s.get('voices'), list) or any(not isinstance(v, str) for v in s['voices'])
+            for s in audio):
+        raise SparkError('The gateway returned invalid speech service metadata.')
     return {"gateway": config["gateway"], "fetched_at": timestamp(),
-            "models": sorted(models, key=lambda m: m["id"])}
+            "audio_services": audio, "models": sorted(models, key=lambda m: m["id"])}
 
 
 def fetch_catalog(config, offline=False):

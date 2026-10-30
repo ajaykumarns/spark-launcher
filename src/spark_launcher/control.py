@@ -23,12 +23,15 @@ def safe_host(host):
     return host
 
 
-def remote_command(config, action, model=None):
+def remote_command(config, action, model=None, *, force=False):
     host = safe_host(config.get("admin_ssh_host"))
     root = config.get("remote_root", "")
     if not Path(root).is_absolute():
         raise SparkError("Set an absolute remote_root in the site file.")
+    if force and action not in ('load', 'unload'):
+        raise SparkError('--force is available only for load and unload.')
     args = [action, "--root", root]
+    if force:args.append('--force')
     if model:
         args.extend(["--model", model])
     return ["ssh", "-o", "ConnectTimeout=10", host, "~/.local/bin/sparky --json node " + shlex.join(args)]
@@ -120,9 +123,9 @@ def remote_status(config):
     return run_remote_json(remote_command(config, 'status'))
 
 
-def remote_result(config, action, model=None):
+def remote_result(config, action, model=None, *, force=False):
     timeout = 7230 if action in ('load', 'unload') else 120
-    return run_remote_json(remote_command(config, action, model), timeout=timeout)
+    return run_remote_json(remote_command(config, action, model, force=force), timeout=timeout)
 
 
 def remote_rpc(config, operation, payload):
@@ -137,7 +140,7 @@ def remote_rpc(config, operation, payload):
 
 
 @contextmanager
-def progress(message, enabled=True):
+def progress(message, enabled=True, *, forced=False):
     """Send occasional progress to stderr. JSON stdout stays one document."""
     if not enabled:
         yield
@@ -149,7 +152,8 @@ def progress(message, enabled=True):
         seconds = 0
         while not done.wait(15):
             seconds += 15
-            print(f'Still waiting ({seconds}s). Active work must finish before a device changes.',
+            detail = 'The forced model operation is still running.' if forced else 'Active work must finish before a device changes.'
+            print(f'Still waiting ({seconds}s). {detail}',
                   file=sys.stderr, flush=True)
 
     thread = threading.Thread(target=report, daemon=True)
@@ -211,7 +215,7 @@ def read_env(path):
     return values
 
 
-def node_resources(root, action, model=None):
+def node_resources(root, action, model=None, *, force=False):
     if action == 'status':
         from .memory_usage import enrich
         return enrich(root, controller_request(root, 'status'))
@@ -219,7 +223,9 @@ def node_resources(root, action, model=None):
         from .resources import read_cluster, resolve_workload
         config = read_cluster(Path(root) / 'config/models.json')
         name, _ = resolve_workload(config, model)
-        return controller_request(root, action, {'model': name})
+        payload = {'model': name}
+        if force:payload['force'] = True
+        return controller_request(root, action, payload)
     raise SparkError('Unknown resource operation.')
 
 

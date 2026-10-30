@@ -96,14 +96,59 @@ sparky models --installed
 sparky plan load glm
 sparky load glm
 sparky unload glm
+sparky unload qwen --force          # Cancel Qwen requests and stop Qwen
+sparky load deepseek --force        # Cancel conflicting requests, stop their models, then load
 sparky run comfyui workflow-api.json --on spark02
 ```
+
+Language models use explicit load and unload commands. Inference requests never
+load a stopped language model or replace a loaded one. If the selected model is
+not ready, the gateway returns an error that asks the agent to ask the human to
+switch the model. The error tells the agent not to load or unload models automatically.
+`spark-auto` selects a ready target. It returns an error if no target is ready.
+The controller sends admitted inference directly to the reserved model server.
+llama-swap still handles explicit model loading and unloading. The controller
+keeps request limits, device reservations, streaming, and forced cancellation.
+Language model idle unloading is disabled. The legacy `idle_ttl_seconds` field
+does not enable it. Exclusive image jobs wait until you explicitly unload any
+language model that occupies their device.
+
+`load --force` and `unload --force` support language models. They cancel conflicting manager requests and waiting device reservations. They stop the affected model services before the requested operation. Requests can fail and partial replies can end. Cancellation has a 30-second drain limit. Service shutdown and model startup can take longer. Protected models and active image jobs still block the operation. Without `--force`, active work finishes first.
+
+
+`sparky run` starts ComfyUI if needed. A separate `sparky load` command is optional.
+For image checkpoints, `load` prepares the service; the workflow loads the weights.
+
+Shared image execution is opt-in. The default policy keeps GPU image jobs exclusive.
+To share with an existing language model, set `comfyui_exclusive_with_llms` to `false`,
+list approved model IDs in `comfyui_shared_llms`, and set a positive
+`comfyui_min_available_gib`. The controller checks host `MemAvailable` on the image
+node. If memory is low, it releases only idle ComfyUI caches, checks again, and waits
+if necessary. It never unloads an LLM to admit a shared image job. LLM startup and
+explicit unload still require exclusive reservations. These checks are not a hard
+memory limit. Test each image workflow and size before enabling it for clients.
+
+The optional image API uses the installed ComfyUI engine. Enable `image_api` only on
+`flux2-klein-4b` with `{"enabled": true, "node": "spark02"}`. It exposes
+`POST /v1/images/generations`, uses the FP8 checkpoint with four sampling steps,
+and returns `data[0].b64_json`. It supports one image per request at 512, 768, or
+1024 square pixels. It does not support image editing or streaming. Gateway image
+requests run one at a time. Use a separate Bifrost image provider to preserve the
+language provider's request slots. Existing ComfyUI UI and API workflows also use
+the job guard. No ComfyUI browser session is needed.
 
 `workflow-api.json` must be a ComfyUI API workflow. The installed checkpoints include image models. No dedicated video checkpoint was found during inventory.
 
 ## Harness configuration
 
 `GET /sparky/catalog` exposes the central names, aliases, context limits, output budgets, modalities, and selected devices through the existing keyless inference ingress. The client fetches this catalog before each launch. It has no local model settings to override it. `spark-auto` keeps its existing gateway alias and uses the common context budget.
+
+Speech services appear in the catalog's `audio_services` field and in `sparky models`.
+Use `sparky config show kokoro` for the speech model, Bifrost API URL, default voice,
+available voices, formats, and CPU placement. `sparky models --installed` and
+`sparky status` include the running audio container. Speech services stay separate
+from the language models offered to agent harnesses. The public speech metadata
+does not include backend addresses or credentials.
 
 The local file `~/.config/sparky/client.json` stores only gateway, SSH, client preferences, and executable paths. Local `models` settings are not supported; model settings belong on Spark 1. See [config.example.json](config.example.json). `SPARKY_CONFIG` selects another client file. `SPARKY_STATE_DIR` selects another local state directory. Use `--offline` explicitly to accept cached discovery data.
 

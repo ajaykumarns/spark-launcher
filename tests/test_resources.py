@@ -115,9 +115,9 @@ class ResourceTests(unittest.TestCase):
     def test_initial_install_does_not_reload_manager(self):
         import yaml
         p=self.root/'manager';p.mkdir()
-        models={n:{'proxy':m['settings'][m['run_on']]['backend_url'],'concurrencyLimit':4,'capabilities':{'context':123456}}
+        models={n:{'proxy':m['settings'][m['run_on']]['backend_url'],'concurrencyLimit':4,'ttl':0,'capabilities':{'context':123456}}
                 for n,m in self.c['models'].items() if m['kind']=='llm'}
-        baseline={'globalTTL':10800,'models':models,'apiKeys':['do-not-touch'],
+        baseline={'globalTTL':0,'models':models,'apiKeys':['do-not-touch'],
                   'routing':{'router':{'use':'matrix','settings':{'matrix':{'sets':{'pair':'nemotron & qwen','single':'deepseek'}}}}}}
         (p/'config.yaml').write_text(yaml.safe_dump(baseline));original=(p/'config.yaml').read_bytes()
         with patch('spark_launcher.coordinator.command') as calls:self.coord.sync_manager()
@@ -135,6 +135,22 @@ class ResourceTests(unittest.TestCase):
         with patch('spark_launcher.resource_runtime.request_json',return_value={'phase':'executing'}) as network:
             with self.assertRaises(SparkError):runtime.clear_comfy('spark01')
         self.assertEqual(network.call_count,1)
+
+    def test_stopped_comfy_service_does_not_block_language_startup(self):
+        from spark_launcher.resource_runtime import Runtime
+        self.c['nodes']['spark01'].update(comfy_url='http://image:8188',comfy_unit='image.service')
+        runtime=Runtime(self.c,self.path)
+        with patch('spark_launcher.resource_runtime.request_json',side_effect=SparkError('unreachable')) as network,patch.object(runtime,'inspect_node',return_value={'units':{'image.service':'inactive'}}):
+            runtime.clear_comfy('spark01')
+        self.assertEqual(network.call_count,1)
+
+    def test_unreachable_active_or_unknown_comfy_service_still_blocks_startup(self):
+        from spark_launcher.resource_runtime import Runtime
+        self.c['nodes']['spark01'].update(comfy_url='http://image:8188',comfy_unit='image.service')
+        runtime=Runtime(self.c,self.path)
+        for units in ({'image.service':'active'},{}):
+            with self.subTest(units=units),patch('spark_launcher.resource_runtime.request_json',side_effect=SparkError('unreachable')),patch.object(runtime,'inspect_node',return_value={'units':units}):
+                with self.assertRaises(SparkError):runtime.clear_comfy('spark01')
 
 
 if __name__=='__main__':unittest.main()

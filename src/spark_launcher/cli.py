@@ -78,6 +78,7 @@ def parser():
         child = command(name, 'Load a model after active work finishes' if name == 'load' else
                         'Unload a model after its active work finishes')
         child.add_argument('model', help='Installed model name or alias; see sparky models')
+        child.add_argument('--force', action='store_true', help='Cancel conflicting language requests and stop their models before this operation')
 
     image_profile = command('image-profile', 'Select tested shared or dedicated image memory limits')
     image_profile.add_argument('mode', choices=('show', 'shared', 'dedicated'), nargs='?', default='show')
@@ -146,6 +147,7 @@ def parser():
         child.add_argument('--root', required=True)
         if name in ('load', 'unload'):
             child.add_argument('--model', required=True)
+            child.add_argument('--force', action='store_true')
     return p
 
 
@@ -238,7 +240,7 @@ def node_action(args):
         return collect(json.loads(sys.stdin.read()))
     if args.action == 'device':
         return node_device()
-    return node_resources(args.root, args.action, getattr(args, 'model', None))
+    return node_resources(args.root, args.action, getattr(args, 'model', None), **({'force': True} if getattr(args, 'force', False) else {}))
 
 
 def read_workflow(path):
@@ -384,7 +386,7 @@ def run(argv=None):
         emit(data, lambda d: view.format_result('run', d), args.json)
         return 0
     if args.command in ('load', 'unload'):
-        if not args.json:
+        if not args.json and not args.force:
             plan = remote_rpc(config, 'plan', {'action': args.command, 'model': args.model})
             conflicts = [step['workload'] for step in plan['steps'] if step['action'] == 'unload' and step['workload'] != plan['workload']]
             if conflicts:
@@ -393,8 +395,10 @@ def run(argv=None):
                 print('This placement recipe has not passed a live model load test.', file=sys.stderr)
         message = (f'Loading {args.model}. This can take several minutes.' if args.command == 'load' else
                    f'Waiting to unload {args.model} after active requests finish.')
-        with progress(message, not args.json):
-            data = remote_result(config, args.command, args.model)
+        if args.force:
+            message = f'Forcing {args.command} {args.model}. Conflicting language requests will stop.'
+        with progress(message, not args.json, forced=args.force):
+            data = remote_result(config, args.command, args.model, **({'force': True} if args.force else {}))
         emit(data, lambda d: view.format_result(args.command, d), args.json)
         return 0
     if args.command == 'sync':

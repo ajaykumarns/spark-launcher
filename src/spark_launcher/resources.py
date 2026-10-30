@@ -83,8 +83,16 @@ def validate_cluster(config):
     policy=config.get('policy',{})
     if type(policy.get('idle_ttl_seconds',10800)) is not int or policy.get('idle_ttl_seconds',10800)<0:
         raise SparkError('Idle timeout must be a nonnegative whole number of seconds.')
-    if policy.get('comfyui_exclusive_with_llms',True) is not True:
-        raise SparkError('ComfyUI GPU jobs must remain exclusive with language models on the same device.')
+    if type(policy.get('comfyui_exclusive_with_llms',True)) is not bool:
+        raise SparkError('ComfyUI exclusivity must be true or false.')
+    shared=policy.get('comfyui_shared_llms',[])
+    if not isinstance(shared,list) or any(not isinstance(n,str) or config['models'].get(n,{}).get('kind')!='llm' for n in shared):
+        raise SparkError('ComfyUI shared models must name configured language models.')
+    minimum=policy.get('comfyui_min_available_gib',0)
+    if isinstance(minimum,bool) or not isinstance(minimum,(int,float)) or not math.isfinite(minimum) or minimum<0:
+        raise SparkError('ComfyUI memory minimum must be a finite nonnegative number.')
+    if not policy.get('comfyui_exclusive_with_llms',True) and (not shared or minimum<=0):
+        raise SparkError('Shared ComfyUI jobs require a language model allowlist and a positive memory minimum.')
     if not isinstance(policy.get('protected_models',[]),list):raise SparkError('Protected models must be a list.')
     for node,meta in config['nodes'].items():
         if not isinstance(meta,dict):raise SparkError(node+' settings must be a mapping.')

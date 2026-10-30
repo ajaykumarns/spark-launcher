@@ -140,6 +140,9 @@ def codex_catalog(plan, catalog):
     models = []
     for model in catalog["models"]:
         entry = copy.deepcopy(template)
+        # Codex's input enum is narrower than the gateway model metadata.
+        inputs = [kind for kind in (model.get("inputs") or ["text"])
+                  if kind in ("text", "image", "audio")] or ["text"]
         entry.update({"slug": model["id"], "display_name": model.get("name", model["id"]),
                       "description": "Spark Gateway", "context_window": model["context_tokens"],
                       "max_context_window": model["context_tokens"], "effective_context_window_percent": 100,
@@ -147,7 +150,7 @@ def codex_catalog(plan, catalog):
                       "availability_nux": {"message": ""}, "available_access_programs": {"cyber": []},
                       "additional_speed_tiers": [], "service_tiers": [], "support_verbosity": False,
                       "apply_patch_tool_type": "freeform", "supports_search_tool": False,
-                      "use_responses_lite": False, "input_modalities": model.get("inputs") or ["text"]})
+                      "use_responses_lite": False, "input_modalities": inputs})
         models.append(entry)
     path = state_dir() / "generated" / plan["session"] / "codex-models.json"
     write_json(path, {"models": models})

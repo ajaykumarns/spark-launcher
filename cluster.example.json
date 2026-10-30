@@ -5,7 +5,7 @@
   "manager_url": "http://192.0.2.10:8000",
   "policy": {
     "interrupt_active_jobs": false,
-    "idle_ttl_seconds": 10800,
+    "idle_ttl_seconds": 0,
     "protected_models": [
       "parakeet"
     ]

@@ -88,13 +88,12 @@ class Runtime:
         if not key:raise SparkError('Private manager credential is missing.')
         return key
 
-    def manager(self, path, method='GET', expect_json=True):
+    def manager(self, path, method='GET', expect_json=True, timeout=7200):
         return request_json(self.config['manager_url'] + path, method=method,
-                            headers={'Authorization':'Bearer '+self.key()}, timeout=7200, expect_json=expect_json)
+                            headers={'Authorization':'Bearer '+self.key()}, timeout=timeout, expect_json=expect_json)
 
-    def native_activity(self):
+    def native_requests(self):
         request = Request(self.config['manager_url']+'/api/events', headers={'Authorization':'Bearer '+self.key()})
-        counts = {}
         # Initial SSE snapshot includes model-dispatched requests, including
         # old requests admitted before this controller was installed.
         with urlopen(request, timeout=8) as response:
@@ -107,11 +106,40 @@ class Runtime:
                 data = envelope.get('data')
                 data = json.loads(data) if isinstance(data, str) else data
                 if data.get('operation') != 'snapshot':continue
-                for entry in data.get('requests', []):
-                    name=entry.get('model') or entry.get('model_id')
-                    if name:counts[name] = counts.get(name, 0)+1
-                return counts
+                return data.get('requests', [])
         raise SparkError('Cannot confirm active manager requests. No model was stopped.')
+
+    def native_activity(self):
+        counts = {}
+        for entry in self.native_requests():
+            name = entry.get('model') or entry.get('model_id')
+            if name:counts[name] = counts.get(name, 0) + 1
+        return counts
+
+    def cancel_native(self, names):
+        from urllib.parse import quote
+        from urllib.error import HTTPError
+        for entry in self.native_requests():
+            if (entry.get('model') or entry.get('model_id')) not in names:continue
+            request_id = entry.get('id')
+            if not request_id:raise SparkError('The manager did not provide a request ID for cancellation.')
+            request = Request(self.config['manager_url']+'/api/inflight/'+quote(str(request_id),safe='')+'/cancel',
+                              headers={'Authorization':'Bearer '+self.key()},method='POST')
+            try:
+                with urlopen(request,timeout=8) as response:response.read()
+            except HTTPError as error:
+                if error.code != 404:raise SparkError('The manager could not cancel a conflicting request.') from None
+                # A request can finish between the snapshot and cancellation.
+
+    def force_stop_llm(self, name):
+        from .lifecycle import stop_units
+        _,_,setting,nodes=selected(self.config,name)
+        path=self.root/'controller'/('running-'+name+'.json')
+        try:info=json.loads(path.read_text())
+        except FileNotFoundError:info={'nodes':list(nodes),'units':setting['units']}
+        stop_units(self,info)
+        self.manager('/api/models/unload/'+name,method='POST',expect_json=False,timeout=30)
+        self._cache=None
 
     def inspect_node(self, name):
         node = copy.deepcopy(self.config['nodes'][name])
@@ -159,7 +187,13 @@ class Runtime:
 
     def clear_comfy(self,node):
         url=self.config['nodes'][node]['comfy_url']
-        state=request_json(url+'/sparky/state',timeout=5)
+        try:state=request_json(url+'/sparky/state',timeout=5)
+        except (SparkError,OSError):
+            # A stopped image engine has no live GPU cache to release. Confirm
+            # its service is inactive; a failed control link alone is not proof.
+            unit=self.config['nodes'][node].get('comfy_unit')
+            if unit and self.inspect_node(node)['units'].get(unit) in ('inactive','failed'):return
+            raise SparkError('Cannot confirm that ComfyUI is idle. No model was started.') from None
         if state.get('phase')=='executing':raise SparkError('ComfyUI is executing a job. Cache was kept.')
         # The job guard serializes cache release with entry into GPU execution.
         request_json(url+'/sparky/free',payload={},timeout=60)

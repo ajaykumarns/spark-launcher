@@ -160,7 +160,8 @@ class CorrectnessTests(unittest.TestCase):
         path=self.manager_config();self.coordinator.fenced=True
         with patch('spark_launcher.coordinator.command',return_value=subprocess.CompletedProcess([],0)),patch('spark_launcher.coordinator.time.sleep'):
             self.coordinator.sync_manager()
-        self.assertEqual(yaml.safe_load(path.read_text())['globalTTL'],123)
+        self.assertEqual(yaml.safe_load(path.read_text())['globalTTL'],0)
+        self.assertTrue(all(row['ttl']==0 for row in yaml.safe_load(path.read_text())['models'].values()))
         self.assertTrue(self.coordinator.fenced)
 
     def test_fence_set_during_reload_is_not_cleared_by_reload(self):
@@ -208,7 +209,7 @@ class CorrectnessTests(unittest.TestCase):
             entered.set()
             if not finish.wait(2):raise RuntimeError('test startup timeout')
         def request():
-            try:result.append(self.coordinator.llm_request('qwen'))
+            try:result.append(self.coordinator._load_llm('qwen'))
             except BaseException as error:errors.append(error)
         def edit():
             self.coordinator.set_placement('qwen','both');changed.set()

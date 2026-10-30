@@ -1,6 +1,8 @@
 """Shared admission and action planning for language and ComfyUI jobs."""
 from __future__ import annotations
 import copy
+from contextlib import contextmanager
+import json
 import sqlite3
 import threading
 import time
@@ -21,9 +23,14 @@ class Coordinator:
         self.reconfigure=threading.RLock()
         self.leases={}
         self.pending=[]
+        self.image_gate=threading.BoundedSemaphore(1)
         self.fenced=False
         self.reloading=False
         self.last_error=None
+        self.force_lock=threading.Lock()
+        self.forcing_nodes=set()
+        self.force_owner=None
+        self.node_generation={n:0 for n in self.config['nodes']}
 
     def refresh(self):
         config=read_cluster(self.path)
@@ -31,13 +38,24 @@ class Coordinator:
             self.config=config;self.runtime.config=config
         return config
 
-    @staticmethod
-    def overlap(a,b):
-        return bool(set(a['nodes'])&set(b['nodes'])) and (a.get('exclusive') or b.get('exclusive') or a['name']!=b['name'])
+    def shared_comfy(self):
+        return not self.config.get('policy',{}).get('comfyui_exclusive_with_llms',True)
 
-    def acquire(self,name,nodes,*,exclusive=False,request_id=None,wait=True):
+    def overlap(self,a,b):
+        if not set(a['nodes'])&set(b['nodes']):return False
+        if a.get('exclusive') or b.get('exclusive'):return True
+        if a['name']==b['name']:return a['name'].startswith('comfyui@')
+        if self.shared_comfy():
+            allowed=self.config['policy']['comfyui_shared_llms']
+            if any(image['name'].startswith('comfyui@') and llm['name'] in allowed
+                   for image,llm in ((a,b),(b,a))):return False
+        return True
+
+    def acquire(self,name,nodes,*,exclusive=False,request_id=None,wait=True,limit=None):
         request_id=request_id or uuid.uuid4().hex
         with self.cv:
+            if self.forcing_nodes.intersection(nodes) and self.force_owner!=threading.get_ident():
+                raise SparkError('A forced model operation is using the requested device. Try again after it finishes.')
             for token,lease in self.leases.items():
                 if lease['request_id']==request_id:return token
             entry=next((p for p in self.pending if p['request_id']==request_id),None)
@@ -46,10 +64,12 @@ class Coordinator:
                 self.pending.append(entry)
             try:
                 while True:
+                    if entry.get('cancelled'):raise SparkError('A forced model operation cancelled this waiting request.')
                     existing=next((t for t,l in self.leases.items() if l['request_id']==request_id),None)
                     if existing:return existing
                     earlier=self.pending[:self.pending.index(entry)]
-                    blocked=self.fenced or self.reloading or any(self.overlap(entry,l) for l in self.leases.values()) or any(self.overlap(entry,p) for p in earlier)
+                    full=limit is not None and sum(l['name']==name for l in self.leases.values())>=limit
+                    blocked=self.fenced or self.reloading or full or any(self.overlap(entry,l) for l in self.leases.values()) or any(self.overlap(entry,p) for p in earlier)
                     if not blocked:
                         token=uuid.uuid4().hex
                         self.runtime.event('admitted',workload=name,nodes=list(nodes),request_id=request_id)
@@ -77,7 +97,7 @@ class Coordinator:
                         self.leases.pop(token,None)
                 self.pending[:]=[p for p in self.pending if not(p['name'] in ('comfyui@'+node,'cpu-probe@'+node) and p['request_id']!=current)]
                 if state.get('executing') and not any(l['request_id']==current for l in self.leases.values()):
-                    self.leases['adopted-'+node]={'name':'comfyui@'+node,'nodes':[node],'exclusive':True,'request_id':current,'started_at':time.time()}
+                    self.leases['adopted-'+node]={'name':'comfyui@'+node,'nodes':[node],'exclusive':not self.shared_comfy(),'request_id':current,'started_at':time.time()}
                 self.cv.notify_all()
 
     def release(self,token):
@@ -137,8 +157,10 @@ class Coordinator:
                 entry['proxy']=setting['backend_url']
                 entry['concurrencyLimit']=setting['concurrency']
                 entry.setdefault('capabilities',{})['context']=setting['context_tokens']
-            if 'idle_ttl_seconds' in self.config.get('policy',{}):
-                after['globalTTL']=self.config['policy']['idle_ttl_seconds']
+            # Language model residency changes only through explicit control.
+            # Apply per-model overrides too; they otherwise win over globalTTL.
+            after['globalTTL']=0
+            for name in enabled_llms(self.config):after['models'][name]['ttl']=0
             routing={'router':{'use':'matrix','settings':{'matrix':{'sets':matrix_sets(self.config)}}}}
             if self.routing_combinations(after.get('routing',{})) != self.routing_combinations(routing):after['routing']=routing
             if before==after:return
@@ -172,11 +194,27 @@ class Coordinator:
         ready={r['model'] for r in rows if r['state']=='ready'}
         if 'auto' not in self.config:raise SparkError('Automatic model routing is not configured.')
         targets=self.config['auto']['targets']
-        return next((n for n in targets if n in ready),self.config['auto']['default'])
+        name=next((n for n in targets if n in ready),None)
+        if name is None:raise SparkError('No automatic routing target is ready. Ask the human to switch the model. Do not load or unload models automatically.')
+        return name
+
+    def ready_placement(self,name,setting,nodes):
+        """Use the manager's live state only for the recorded, unchanged placement."""
+        path=Path(self.config['root'])/'controller'/('running-'+name+'.json')
+        try:
+            actual=json.loads(path.read_text())
+            if set(actual.get('nodes',[]))!=set(nodes) or actual.get('units')!=setting['units']:return False
+            rows=self.runtime.manager('/running').get('running',[])
+            return any(isinstance(row,dict) and row.get('model')==name and row.get('state')=='ready' for row in rows)
+        except (OSError,ValueError,TypeError,AttributeError,SparkError):
+            return False
 
     def prepare_llm(self,name):
         model,placement,setting,nodes=selected(self.config,name)
         with self.transition:
+            # The native manager still owns loading, FIFO drain and compatibility. An already-ready model with
+            # the same recorded units needs no SSH, Docker or asset inventory on every inference request.
+            if self.ready_placement(name,setting,nodes):return
             state=self.runtime.snapshot(True)['models'].get(name,{})
             if state.get('state')=='ready' and set(state.get('nodes',[]))==set(nodes):return
             snapshot=self.runtime.snapshot()
@@ -190,27 +228,147 @@ class Coordinator:
             self.runtime.manager('/upstream/'+name+'/health',expect_json=False)
             self.runtime._cache=None
 
+    def require_ready_llm(self,name,setting,nodes):
+        if not self.ready_placement(name,setting,nodes):
+            raise SparkError(name+' is not ready at the selected placement. Ask the human to switch the model. Do not load or unload models automatically.')
+
     def llm_request(self,requested):
+        """Reserve an already-ready server. Inference never calls lifecycle APIs."""
+        if not isinstance(requested,str):raise SparkError('Select a language model by name.')
+        generation=dict(self.node_generation)
+        with self.reconfigure:
+            self.refresh()
+            normalized=requested.strip().casefold().removeprefix('garuda/')
+            name=self.resolve_auto() if normalized in ('spark-auto','auto') else resolve_workload(self.config,requested)[0]
+            model,_,setting,nodes=selected(self.config,name)
+            if model['kind']!='llm':raise SparkError('Select a language model for this endpoint.')
+            if any(generation[n]!=self.node_generation[n] for n in nodes):
+                raise SparkError('A forced model operation cancelled this waiting request.')
+            self.require_ready_llm(name,setting,nodes)
+            self.reconcile_jobs()
+            token=self.acquire(name,nodes,limit=setting['concurrency'])
+            try:
+                # State can change while this request waits for a reservation.
+                self.require_ready_llm(name,setting,nodes)
+                with self.cv:
+                    if self.leases[token].get('cancelled'):
+                        raise SparkError('A forced model operation cancelled this request.')
+                    self.leases[token]['backend_url']=setting['backend_url']
+            except BaseException:self.release(token);raise
+        return name,token
+
+    def inference_origin(self,token):
+        with self.cv:return self.leases[token]['backend_url']
+
+    def register_inference_cancel(self,token,cancel):
+        with self.cv:
+            lease=self.leases[token]
+            lease['cancel']=cancel
+            cancelled=lease.get('cancelled',False)
+        if cancelled:cancel()
+
+    def _load_llm(self,requested):
+        """Only explicit administrator load operations may start a server."""
         if not isinstance(requested,str):raise SparkError('Select a language model by name.')
         # Use one configuration generation for manager sync, reservation and
         # startup. A placement edit must not change nodes between these steps.
+        generation=dict(self.node_generation)
         with self.reconfigure:
             self.sync_manager()
             normalized=requested.strip().casefold().removeprefix('garuda/')
             name=self.resolve_auto() if normalized in ('spark-auto','auto') else resolve_workload(self.config,requested)[0]
-            model,_,_,nodes=selected(self.config,name)
+            model,_,setting,nodes=selected(self.config,name)
             if model['kind']!='llm':raise SparkError('Select a language model for this endpoint.')
+            if any(generation[n]!=self.node_generation[n] for n in nodes):
+                raise SparkError('A forced model operation cancelled this waiting request.')
             self.reconcile_jobs()
-            token=self.acquire(name,nodes)
-            try:self.prepare_llm(name)
+            # A ready, approved LLM may share an image job. Starting an LLM
+            # still needs an exclusive lease: its startup can release caches.
+            starting=self.shared_comfy() and not self.ready_placement(name,setting,nodes)
+            token=self.acquire(name,nodes,exclusive=starting)
+            try:
+                self.prepare_llm(name)
+                with self.cv:
+                    if self.leases[token].get('cancelled'):
+                        raise SparkError('A forced model operation cancelled this request.')
             except BaseException:self.release(token);raise
         return name,token
 
-    def load(self,requested):
+    @contextmanager
+    def force_control(self,requested,action):
+        # Enter before reconfigure: a waiting load can own that lock.
+        if not self.force_lock.acquire(blocking=False):
+            raise SparkError('Another forced model operation is running.')
+        try:
+            self.refresh()
+            name,model=resolve_workload(self.config,requested)
+            if model['kind']!='llm':raise SparkError('--force currently supports language models only.')
+            if model.get('keep_loaded'):raise SparkError(name+' must stay loaded.')
+            _,_,_,desired=selected(self.config,name)
+            snapshot=self.runtime.snapshot(True)
+            nodes=set(desired)|set(snapshot['models'].get(name,{}).get('nodes',[]))
+            with self.cv:
+                if self.fenced or self.reloading:raise SparkError('Configuration is changing. Try again after it finishes.')
+                affected={n for n,row in snapshot['models'].items() if row['kind']=='llm' and row.get('loaded') and nodes.intersection(row['nodes'])}
+                affected.add(name)
+                affected.update(l['name'] for l in self.leases.values() if nodes.intersection(l['nodes']))
+                if any(self.config['models'].get(n,{}).get('keep_loaded') for n in affected):
+                    raise SparkError('A protected model uses the requested device.')
+                if any(n not in self.config['models'] or self.config['models'][n]['kind']!='llm' for n in affected):
+                    raise SparkError('An active image job uses the requested device. Stop that job before using --force.')
+                if any(snapshot.get('comfyui',{}).get(n,{}).get('executing') or (snapshot.get('comfyui',{}).get(n,{}).get('running') and snapshot.get('comfyui',{}).get(n,{}).get('phase')!='waiting') for n in nodes):
+                    raise SparkError('An active image job uses the requested device. Stop that job before using --force.')
+                if action=='unload':affected={name}
+                self.forcing_nodes=nodes;self.force_owner=threading.get_ident()
+                for node in nodes:self.node_generation[node]+=1
+                for entry in self.pending:
+                    if nodes.intersection(entry['nodes']):entry['cancelled']=True
+                cancellations=[]
+                for lease in self.leases.values():
+                    if lease['name'] in affected:
+                        lease['cancelled']=True
+                        if lease.get('cancel'):cancellations.append(lease['cancel'])
+                self.cv.notify_all()
+            self.runtime.event('force_requested',workload=name,operation=action,affected=sorted(affected))
+            for cancel in cancellations:cancel()
+            deadline=time.monotonic()+30
+            while True:
+                self.runtime.cancel_native(affected)
+                busy=self.runtime.native_activity()
+                with self.cv:
+                    active=any(nodes.intersection(l['nodes']) for l in self.leases.values())
+                if not active and not any(busy.get(n,0) for n in affected):break
+                if time.monotonic()>=deadline:
+                    raise SparkError('Conflicting requests did not stop within 30 seconds. No new model was started.')
+                time.sleep(.1)
+            if not self.reconfigure.acquire(timeout=30):
+                raise SparkError('An earlier configuration operation did not stop within 30 seconds.')
+            try:
+                if not self.transition.acquire(timeout=30):
+                    raise SparkError('An earlier model operation did not stop within 30 seconds.')
+                try:
+                    # Refresh actual placement after interrupted startup has finished.
+                    current=self.runtime.snapshot(True)
+                    for other in sorted(affected):
+                        if other==name or current['models'].get(other,{}).get('loaded'):
+                            self.runtime.force_stop_llm(other)
+                    yield name
+                finally:self.transition.release()
+            finally:self.reconfigure.release()
+        finally:
+            with self.cv:
+                self.forcing_nodes=set();self.force_owner=None;self.cv.notify_all()
+            self.force_lock.release()
+
+    def load(self,requested,*,force=False):
+        if force:
+            with self.force_control(requested,'load') as name:
+                return {**self.load(name),'forced':True}
+
         self.refresh()
         name,model=resolve_workload(self.config,requested)
         if model['kind']=='llm':
-            _,token=self.llm_request(name)
+            _,token=self._load_llm(name)
             self.release(token)
         elif model['kind']=='audio':
             selected(self.config,name)
@@ -223,7 +381,26 @@ class Coordinator:
             return {'status':'ready','workload':name,'note':'ComfyUI is available. Weights load when a workflow runs.'}
         return {'status':'ready','workload':name}
 
-    def unload(self,requested):
+    def submit_comfy(self,graph,on=None):
+        from .catalog import request_json
+        from .deployment import wait_http
+        self.refresh()
+        on=on or self.config['models']['comfyui']['run_on']
+        _,_,setting,nodes=selected(self.config,'comfyui',on)
+        if len(nodes)!=1:raise SparkError('Submit each ComfyUI workflow to one device.')
+        node=nodes[0]
+        if not self.runtime.inspect_node(node)['comfyui']['reachable']:
+            self.runtime.unit(node,'start',self.config['nodes'][node]['comfy_unit'])
+            wait_http(setting['backend_url']+'/queue',timeout=180)
+        result=request_json(setting['backend_url']+'/prompt',payload=graph if 'prompt' in graph else {'prompt':graph},timeout=120)
+        self.runtime.event('workflow_submitted',node=node,prompt_id=result.get('prompt_id'))
+        return {'node':node,**result}
+
+    def unload(self,requested,*,force=False):
+        if force:
+            with self.force_control(requested,'unload') as name:
+                self.runtime.event('unloaded',workload=name,reason='Explicit forced unload.')
+                return {'status':'unloaded','workload':name,'forced':True}
         with self.reconfigure:
             self.refresh()
             name,model=resolve_workload(self.config,requested)
@@ -261,17 +438,34 @@ class Coordinator:
         actual_cpu=bool(graph) and all(v.get('class_type')=='SparkyProbe' for v in graph.values())
         if cpu_only and not actual_cpu:raise SparkError('This workflow requires a GPU reservation.')
         name=('cpu-probe@' if actual_cpu else 'comfyui@')+node
-        token=self.acquire(name,[] if actual_cpu else [node],exclusive=True,request_id=node+':'+str(prompt_id),wait=False)
+        shared=not actual_cpu and self.shared_comfy()
+        token=self.acquire(name,[] if actual_cpu else [node],exclusive=not shared,request_id=node+':'+str(prompt_id),wait=False)
         if token is None:return {'status':'waiting','retry_after':1}
         try:
             if not actual_cpu:
                 with self.transition:
                     snapshot=self.runtime.snapshot(True)
                     conflicts=[n for n,s in snapshot['models'].items() if s['kind']=='llm' and s['loaded'] and node in s['nodes']]
-                    self.wait_native_idle(set(conflicts))
-                    for other in conflicts:
-                        self.runtime.manager('/api/models/unload/'+other,method='POST',expect_json=False)
-                        self.runtime.event('unloaded',workload=other,reason='ComfyUI workflow needs the device.',node=node)
+                    if shared:
+                        policy=self.config['policy']
+                        unsupported=[n for n in conflicts if n not in policy['comfyui_shared_llms']]
+                        available=snapshot['nodes'][node]['memory_bytes']['MemAvailable']
+                        minimum=policy['comfyui_min_available_gib']*1024**3
+                        if not unsupported and available<minimum:
+                            # Release only this engine's idle cache. Never stop
+                            # an LLM to make room for a shared image job.
+                            self.runtime.clear_comfy(node)
+                            available=self.runtime.inspect_node(node)['memory_bytes']['MemAvailable']
+                        if unsupported or available<minimum:
+                            self.release(token)
+                            return {'status':'waiting','retry_after':2,'reason':'unapproved_loaded_llm' if unsupported else 'low_available_memory',
+                                    'available_bytes':available,'minimum_bytes':minimum}
+                        self.runtime.event('comfy_shared_admitted',node=node,prompt_id=str(prompt_id),
+                                           llms=conflicts,available_bytes=available,minimum_bytes=minimum)
+                        return {'token':token,'status':'admitted','node':node,'cpu_only':False,'shared':True}
+                    if conflicts:
+                        self.release(token)
+                        return {'status':'waiting','retry_after':2,'reason':'loaded_llm_requires_explicit_unload'}
                     # Audio remains loaded; re-check free memory after LLMs stop.
                     self.runtime._cache=None
             return {'token':token,'status':'admitted','node':node,'cpu_only':actual_cpu}
@@ -302,4 +496,12 @@ class Coordinator:
             routed=[row for row in data if row['id'] in targets]
             data.append({'id':'garuda/spark-auto','name':'Spark Auto','context_length':min(x['context_length'] for x in routed),
                          'aliases':['auto'],'output_tokens':min(x['output_tokens'] for x in routed),'inputs':['text']})
-        return {'data':data,'authority':'spark01','config_version':self.config['version']}
+        audio=[]
+        fields=('model','api_base','speech_url','default_voice','voices','preferred_voices',
+                'languages','formats','device','api_key_required')
+        for name,model in self.config['models'].items():
+            if model['kind']=='audio' and isinstance(model.get('tts'),dict):
+                audio.append({'id':name,'kind':'tts','name':model.get('name',name),
+                              'nodes':list(selected(self.config,name)[3]),
+                              **{key:model['tts'][key] for key in fields if key in model['tts']}})
+        return {'data':data,'audio_services':audio,'authority':'spark01','config_version':self.config['version']}

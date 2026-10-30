@@ -142,6 +142,25 @@ providers:
         self.assertTrue(all(m["upgrade"] is None for m in models))
         self.assertTrue(all(m["model_messages"] == {} for m in models))
 
+    def test_codex_catalog_filters_unsupported_input_types(self):
+        cases = [(["text", "image", "video"], ["text", "image"]),
+                 (["text", "audio"], ["text", "audio"]),
+                 (["video", "future-input"], ["text"]),
+                 ([], ["text"]), (None, ["text"])]
+        for inputs, expected in cases:
+            with self.subTest(inputs=inputs):
+                catalog = copy.deepcopy(self.cat)
+                catalog["models"][0]["inputs"] = inputs
+                before = copy.deepcopy(catalog)
+                plan = build_plan(self.c, catalog, resolve(catalog, "test"), "codex", self.root, "test")
+                result = subprocess.CompletedProcess([], 0, json.dumps({"models": [{"slug": "cloud"}]}), "")
+                with patch("spark_launcher.adapters.subprocess.run", return_value=result):
+                    codex_catalog(plan, catalog)
+                models = json.loads(Path(plan["generated_files"][0]).read_text())["models"]
+                self.assertEqual(models[0]["input_modalities"], expected)
+                self.assertEqual(catalog, before)
+                self.assertEqual(models[0]["context_window"], catalog["models"][0]["context_tokens"])
+
     def test_launch_fake_child_and_private_metadata(self):
         child = self.root / "child.py"
         child.write_text("#!/usr/bin/env python3\nimport os,sys,json\njson.dump({'args':sys.argv[1:],'model':os.environ['ANTHROPIC_MODEL']},open('child.json','w'))\nsys.exit(7)\n")

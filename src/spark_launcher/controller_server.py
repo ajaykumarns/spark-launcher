@@ -2,6 +2,8 @@
 from __future__ import annotations
 import http.client
 import json
+import select
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -83,6 +85,10 @@ class Handler(BaseHTTPRequestHandler):
         path=urlsplit(self.path).path
         c=self.coordinator
         if self.command=='GET' and path=='/health':return self.reply({'status':'ok'})
+        if self.command=='GET' and path=='/v1/image-models':
+            from .image_api import image_models
+            c.refresh()
+            return self.reply({'object':'list','data':image_models(c.config)})
         if self.command=='GET' and path in ('/v1/models','/sparky/catalog'):
             catalog=c.catalog()
             if path=='/v1/models':
@@ -91,8 +97,13 @@ class Handler(BaseHTTPRequestHandler):
                 for row in wire.get('data',[]):
                     key=row['id'].removeprefix('garuda/')
                     if key in extra:row.update({k:v for k,v in extra[key].items() if k!='id'})
+                from .image_api import image_models
+                wire.setdefault('data',[]).extend(image_models(c.config))
                 return self.reply(wire)
             return self.reply(catalog)
+        if self.command=='POST' and path=='/v1/images/generations':
+            from .image_api import generate
+            return self.reply(generate(c,self.json_body()))
         if path.startswith('/control/'):
             if not self.allowed_control():return self.reply({'error':'Use administrator SSH for control operations.'},403)
             reads={'/control/status','/control/config','/control/leases'}
@@ -111,19 +122,13 @@ class Handler(BaseHTTPRequestHandler):
                 if path=='/control/leases':return self.reply(c.snapshot()['admission'])
             data=self.json_body()
             if path=='/control/plan':return self.reply(c.plan(data['model'],data.get('action','load'),data.get('on')))
-            if path=='/control/load':return self.reply(c.load(data['model']))
-            if path=='/control/unload':return self.reply(c.unload(data['model']))
+            if path in ('/control/load','/control/unload'):
+                force=data.get('force',False)
+                if type(force) is not bool:raise ValueError('force must be true or false.')
+                operation=c.load if path=='/control/load' else c.unload
+                return self.reply(operation(data['model'],**({'force':True} if force else {})))
             if path=='/control/run':
-                from .resources import selected
-                c.refresh()
-                on=data.get('on') or c.config['models']['comfyui']['run_on']
-                _,_,setting,nodes=selected(c.config,'comfyui',on)
-                if len(nodes)!=1:raise SparkError('Submit each ComfyUI workflow to one device.')
-                graph=data['workflow']
-                payload=graph if 'prompt' in graph else {'prompt':graph}
-                result=request_json(setting['backend_url']+'/prompt',payload=payload,timeout=120)
-                c.runtime.event('workflow_submitted',node=nodes[0],prompt_id=result.get('prompt_id'))
-                return self.reply({'node':nodes[0],**result})
+                return self.reply(c.submit_comfy(data['workflow'],data.get('on')))
             if path=='/control/placement':return self.reply(c.set_placement(data['model'],data['on']))
         if path in ('/jobs/acquire','/jobs/release','/jobs/cancel') and self.command=='POST':
             data=self.json_body()
@@ -153,18 +158,55 @@ class Handler(BaseHTTPRequestHandler):
             name,token=c.llm_request(body['model'])
             try:
                 body['model']=name
-                return self.proxy(c.config['manager_url'],path,json.dumps(body).encode())
+                # Send inference directly to the reserved server. Even if it
+                # stops after admission, the request cannot make llama-swap
+                # start it again or evict another model.
+                return self.proxy(c.inference_origin(token),path,json.dumps(body).encode(),token=token)
             finally:c.release(token)
         self.reply({'error':'Unknown endpoint'},404)
 
-    def proxy(self,origin,path,body):
+    def proxy(self,origin,path,body,token=None):
         target=urlsplit(origin)
         connection=http.client.HTTPConnection(target.hostname,target.port,timeout=7200)
         headers={k:v for k,v in self.headers.items() if k.lower() not in hop_headers(self.headers)}
         headers['Content-Length']=str(len(body))
         started=False
+        finished=threading.Event()
+        disconnected=threading.Event()
+        upstream_socket=[]
+
+        def cancel():
+            disconnected.set()
+            transport=upstream_socket[0] if upstream_socket else connection.sock
+            if transport is not None:
+                try:transport.shutdown(socket.SHUT_RDWR)
+                except OSError:pass
+
+        if token is not None:self.coordinator.register_inference_cancel(token,cancel)
+
+        def watch_client():
+            # A blocked upstream read must not hide a downstream cancellation.
+            # Keep the socket reference: getresponse() can detach it from the
+            # HTTPConnection when the upstream sends Connection: close.
+            while not finished.is_set():
+                try:
+                    ready,_,_=select.select([self.connection],[],[],.1)
+                    if not ready:continue
+                    if self.connection.recv(1,socket.MSG_PEEK):
+                        finished.wait(.1)
+                        continue
+                except (OSError,ValueError):
+                    if finished.is_set():return
+                cancel()
+                return
+
+        watcher=threading.Thread(target=watch_client,daemon=True)
+        watcher.start()
         try:
+            if disconnected.is_set():return
             connection.request(self.command,path,body=body,headers=headers)
+            if connection.sock is not None:upstream_socket.append(connection.sock)
+            if disconnected.is_set():return
             response=connection.getresponse()
             self.send_response(response.status)
             for key,value in response.getheaders():
@@ -176,10 +218,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not chunk:break
                 self.wfile.write(chunk);self.wfile.flush()
         except (OSError,http.client.HTTPException):
-            if not started:self.reply({'error':'Model upstream is unavailable.'},502)
+            if not started and not disconnected.is_set():self.reply({'error':'Model upstream is unavailable.'},502)
         finally:
+            finished.set()
             self.close_connection=True
             connection.close()
+            watcher.join(.5)
 
     def handle_request(self):
         try:self.dispatch()
