@@ -191,7 +191,9 @@ make test
 uv run --locked make node-helper
 ```
 
-Copy `dist/sparky.pyz` to `~/.local/bin/sparky` on both Sparks. Stage the cluster configuration on Spark 1. The explicit node installer creates the controller service and ComfyUI guards. It waits for image queues to drain before it restarts each ComfyUI service. It preserves running LLM and Parakeet containers. It keeps private backups of changed server files.
+Copy `dist/sparky.pyz` and `tools/install_node_helper.py` to each Spark. Run
+`python3 install_node_helper.py --archive sparky.pyz` on that Spark. The installer
+keeps a backup and preserves archive offsets used by a running controller. Stage the cluster configuration on Spark 1. The explicit node installer creates the controller service and ComfyUI guards. It waits for image queues to drain before it restarts each ComfyUI service. It preserves running LLM and Parakeet containers. It keeps private backups of changed server files.
 
 ```sh
 sparky node install --dir /path/to/staged-config
