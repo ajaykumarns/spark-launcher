@@ -65,7 +65,7 @@ The authoritative model file lives on Spark 1:
 
 It lists installed LLMs, Parakeet, Whisper, both ComfyUI engines, and installed ComfyUI checkpoints. Whisper stays disabled. Parakeet has `keep_loaded: true` and appears in `policy.protected_models`.
 
-The policy field `idle_ttl_seconds` controls the manager idle timeout. ComfyUI GPU work always requires exclusive use of its device. There is no switch to bypass that rule.
+Language model idle unloading is disabled. Shared ComfyUI execution requires an explicit model allowlist and a tested memory minimum. See Resource control below.
 
 Each LLM has a `run_on` value: `spark01`, `spark02`, or `both`. Its `settings` contain the supported placements. Each placement specifies its nodes, systemd units, model context, backend address, startup memory check, and numeric runtime parameters. A two-device placement runs one distributed model. It does not create two independent copies. The prepared Qwen two-device recipe needs a separate runtime load test before its performance can be claimed.
 
@@ -83,7 +83,7 @@ A placement change applies on the next load. Use a plan first to see which idle 
 
 ## Resource control
 
-The controller runs as `sparky-controller.service` on Spark 1. The existing llama-swap manager still loads models, drains active LLM requests, and applies the three-hour idle timeout. Sparky derives its compatibility matrix from the central model placements. Nemotron on Spark 1 and Qwen on Spark 2 can run together. The two-device models require both nodes.
+The controller runs as `sparky-controller.service` on Spark 1. The existing llama-swap manager handles explicit model loading and unloading. Inference cannot start a stopped model. Idle unloading is disabled. Sparky derives its compatibility matrix from the central model placements. Nemotron on Spark 1 and Qwen on Spark 2 can run together. The two-device models require both nodes.
 
 The controller tracks node reservations for LLM requests and ComfyUI jobs. Conflicting work waits. Active LLM requests and active image jobs finish before a conflicting model is unloaded. Unknown activity prevents unloading. Idle ComfyUI caches can be released. Protected Parakeet containers stay loaded. These are software admission checks. They do not create a hardware GPU memory cap.
 
@@ -204,3 +204,56 @@ The staged folder must contain `models.json`. The first install creates the cent
 The interface review is in [docs/usability-review.md](docs/usability-review.md). The full correctness review is in [docs/correctness-review.md](docs/correctness-review.md). Current checks are in [docs/VALIDATION.md](docs/VALIDATION.md).
 
 Focused verification tools cover resource planning, node reservations, guarded ComfyUI execution, numeric recipe rendering, native harness parsers, and synthetic harness requests. Synthetic tests do not prove model quality. Live checks must distinguish a prepared recipe from a loaded and verified model.
+
+
+## OCR service
+
+OCR management uses administrator SSH to Spark01. Update Sparky on the client and
+Spark01 before using these commands. It does not require an update on Spark02.
+The client file must have `admin_ssh_host`, an absolute `remote_root`, and the
+HTTPS Bifrost `gateway`. The cluster root must already contain the Bifrost setup.
+
+Spark01 needs Git access to the private OCR repository, Docker Engine, the Compose
+plugin with GPU support, NVIDIA Container Toolkit, and passwordless `sudo -n docker`
+for the administrator account. Git authentication stays on Spark01. Do not put
+credentials in the repository URL. OCR bootstrap downloads pinned model weights.
+
+```sh
+sparky ocr install --repo git@github.com:OWNER/PRIVATE-OCR.git --ref main
+sparky ocr status
+sparky ocr stop
+sparky ocr start
+sparky ocr status --json
+```
+
+The first install requires `--repo`. Use a commit hash with `--ref` for a fixed
+source revision. Later `sparky ocr install` reuses the saved repository and ref.
+It checks out that ref again. For a branch, this installs its current commit.
+For a commit hash, it keeps that exact commit. Use `--rebuild` to rebuild images;
+otherwise an existing image for the package version is reused.
+
+Install builds missing images, prepares models, creates private service settings,
+starts OCR, and registers its Bifrost provider and MCP tool. It preserves existing
+OCR credentials and custom model-cache paths. It refuses to replace a Mistral
+provider owned by another service. A failed activation attempts to restore the
+previous OCR service. Build and registration details stay in a private install log
+on Spark01. JSON stdout contains one result. Interrupted remote work may continue;
+check `sparky ocr status` before retrying.
+
+Files are stored under `<remote_root>/ocr/`: `service.env` holds the private token,
+`sparky-install.json` identifies the selected source revision, and `releases/`
+contains source checkouts and install logs. Existing `ocr/source/deploy/.env`
+settings are adopted on the first managed install. Previous source releases remain
+on disk for recovery. They are not removed automatically.
+
+Status reads container state and the HTTP health endpoint. It does not run OCR,
+load models, or change services. `api_ready` checks the API, not OCR accuracy or a
+warm GPU worker. Start uses the installed image and settings. It does not build
+or download weights. Stop stops only the `spark-ocr` container and releases its
+worker memory. Model files and Bifrost registrations stay in place. Requests while
+OCR is stopped fail; they do not start it. Run `sparky ocr start` explicitly.
+
+These commands do not load, unload, or restart language models. OCR is a separate
+Docker service. Resource admission for language and image models does not account
+for OCR allocations. A GPU allocation failure produces an OCR error. This interface
+does not add a new scheduling or model-switch policy.

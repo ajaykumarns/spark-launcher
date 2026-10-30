@@ -70,6 +70,15 @@ def parser():
     models.add_argument('--offline', action='store_true', help='Use cached data without checking the server')
     models.add_argument('--installed', action='store_true', help='Include audio, ComfyUI, and installed image models')
     command('devices', 'Show memory, disk space, GPU use, and containers on each Spark')
+    ocr = command('ocr', 'Install, check, start, or stop the OCR service on Spark 1')
+    ocr_sub = ocr.add_subparsers(dest='ocr_action', required=True, metavar='ACTION')
+    for name in ('install', 'status', 'start', 'stop'):
+        child = ocr_sub.add_parser(name)
+        common_output_options(child)
+        if name == 'install':
+            child.add_argument('--repo', help='Private OCR Git repository URL; required for the first install')
+            child.add_argument('--ref', help='Repository branch, tag, or commit')
+            child.add_argument('--rebuild', action='store_true', help='Rebuild images even if the release is cached')
     plan = command('plan', 'Show required resource actions without changing services')
     plan.add_argument('action', choices=('load', 'unload'))
     plan.add_argument('model', help='Installed model name or alias')
@@ -133,6 +142,9 @@ def parser():
     node_sub = node.add_subparsers(dest='action', required=True, metavar='ACTION')
     node_sub.add_parser('device')
     node_sub.add_parser('memory')
+    ocr_node = node_sub.add_parser('ocr')
+    ocr_node.add_argument('--root', required=True)
+    ocr_node.add_argument('--payload', default='-')
     install = node_sub.add_parser('install')
     install.add_argument('--dir', required=True)
     for name in ('drain-comfy', 'probe', 'controller'):
@@ -186,6 +198,9 @@ def initialize(args):
 
 def node_action(args):
     """Private protocol used by the manager and SSH client. No human rendering."""
+    if args.action == 'ocr':
+        from .ocr import manage
+        return manage(args.root, json.loads(sys.stdin.read() if args.payload == '-' else args.payload))
     if args.action == 'gateway':
         from .gateway import enable_gateway
         return enable_gateway(args.root)
@@ -354,6 +369,14 @@ def run(argv=None):
             model = resolve(catalog, args.model) if args.model else None
             emit(model if model and args.json else catalog,
                  lambda d: view.format_models(d, model), args.json)
+        return 0
+    if args.command == 'ocr':
+        from .ocr import remote_ocr, format_ocr
+        if args.ocr_action == 'install' and not args.json:
+            print('Installing OCR on Spark01. This can take several minutes.', file=sys.stderr)
+        result = remote_ocr(config, args.ocr_action, repo=getattr(args, 'repo', None),
+                            ref=getattr(args, 'ref', None), rebuild=getattr(args, 'rebuild', False))
+        emit(result, format_ocr, args.json)
         return 0
     if args.command == 'status':
         emit(remote_status(config), format_status, args.json)
