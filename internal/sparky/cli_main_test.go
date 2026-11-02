@@ -16,7 +16,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -577,8 +576,12 @@ func TestMainHarnessDryRunPrepareAndChildCode(t *testing.T) {
 	if code != 0 || !strings.Contains(out, `"harness": "hermes"`) || !strings.Contains(out, `"prepared": false`) {
 		t.Fatalf("dry run: %d %q %q", code, out, errout)
 	}
-	if !strings.Contains(out, strconv.Quote(hermesStub)) {
-		t.Fatalf("dry run plan does not use the test stub: %q", out)
+	var plan Object
+	if err := json.Unmarshal([]byte(out), &plan); err != nil {
+		t.Fatalf("dry run json: %v %q", err, out)
+	}
+	if plan["binary"] != hermesStub {
+		t.Fatalf("dry run plan does not use the test stub: %v %q", plan["binary"], out)
 	}
 	if _, err := os.Stat(filepath.Join(hermes, "config.yaml")); !os.IsNotExist(err) {
 		t.Fatal("dry run wrote settings")
