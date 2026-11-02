@@ -1,0 +1,208 @@
+name: Release
+
+# Publish a versioned Sparky release.
+#
+# Triggers:
+#   * a push of a version tag (v[0-9]*), for example `git tag v0.6.3 &&
+#     git push origin v0.6.3`;
+#   * a manual run with the name of an EXISTING version tag.
+#
+# Only stable numeric vX.Y.Z tags are published. Prerelease or build-metadata
+# tags (v1.2.3-rc.1, v1.2.3+build7) are rejected by tools/release-preflight.sh.
+#
+# Rules this workflow enforces:
+#   * the tag must exist and its commit must be reachable from main, so no
+#     unchecked ref can be released;
+#   * every job builds the exact tag revision, checked out by full commit SHA;
+#   * Linux ARM64 and Mac ARM64 assets come from separate jobs, and the Mac
+#     app is built on a native macos-15 (ARM64) runner - there is no fake
+#     headless app;
+#   * tests run before anything is published and the publish job requires every
+#     needed job to have succeeded, so any failure leaves the draft untouched
+#     and the run red;
+#   * the release is created as a draft, assets are uploaded only afterwards,
+#     and an already published release is never modified.
+#
+# Publishing touches GitHub only. It never deploys, installs, restarts a Spark,
+# loads a model, or runs any lifecycle command.
+#
+# Official actions are pinned to full commit SHAs (tag in the trailing
+# comment). Re-pin with, for example:
+#   gh api repos/actions/download-artifact/git/ref/tags/v8.0.2 --jq .object.sha
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag to publish (vX.Y.Z, reachable from main)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Keyed only on the tag, NOT on github.event_name, so a tag push and a
+  # workflow_dispatch of the SAME tag share one group and run one at a time.
+  # If the event name were part of the key, the two would land in different
+  # groups, both find the same existing draft, both delete its assets and race
+  # publishing. cancel-in-progress stays false: never drop a half-published run.
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: validate ${{ github.event.inputs.tag || github.ref_name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      version: ${{ steps.check.outputs.version }}
+      commit: ${{ steps.check.outputs.commit }}
+    env:
+      # The dispatch input is user-supplied, so it reaches the shell only as
+      # data through this environment variable - never interpolated into the
+      # script body.
+      REQUESTED_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          # Credentials stay in place for this job only: the script below runs
+          # `git fetch origin` to read the tag and the main tip. This job has
+          # contents:read and never writes.
+          persist-credentials: true
+
+      - name: Check tag name, existence and reachability from main
+        id: check
+        run: sh tools/release-preflight.sh --tag "$REQUESTED_TAG" --main-branch main
+
+  test:
+    name: tests before publish
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Exact tag revision, by immutable SHA.
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          check-latest: false
+      - run: make vet
+      - run: make fmt-check
+      - run: make test
+      - name: Race detector (5m per-package budget)
+        run: make race RACE_TIMEOUT=5m
+
+  build-linux:
+    name: linux/arm64 CLI and installer
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      COMMIT: ${{ needs.preflight.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          check-latest: false
+      - name: Build versioned archives and per-platform checksums
+        run: make release-linux VERSION="$VERSION" COMMIT="$COMMIT"
+      - name: Show what will be published
+        run: |
+          set -eu
+          ls -l dist/release
+          cat dist/release/SHA256SUMS.linux-arm64
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sparky-assets-linux-arm64
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 30
+
+  build-macos:
+    name: darwin/arm64 CLI, installer and Sparky.app
+    needs: preflight
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      COMMIT: ${{ needs.preflight.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          check-latest: false
+      - name: Confirm the ARM64 runner
+        run: |
+          set -eu
+          arch=$(uname -m)
+          echo "runner arch: $arch"
+          [ "$arch" = arm64 ] || { echo "Sparky.app must be built on an arm64 runner" >&2; exit 1; }
+      - name: Native tests on the platform that ships the app
+        run: make test
+      - name: Build versioned archives, checksums and the ad-hoc signed app
+        run: make release-macos VERSION="$VERSION" COMMIT="$COMMIT"
+      - name: Show what will be published
+        run: |
+          set -eu
+          ls -l dist/release
+          cat dist/release/SHA256SUMS.darwin-arm64
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sparky-assets-darwin-arm64
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: publish draft-first release
+    needs: [preflight, test, build-linux, build-macos]
+    # Fail closed: publish only when every needed job actually succeeded.
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.test.result == 'success' && needs.build-linux.result == 'success' && needs.build-macos.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      # The only job in this repository with write access, and it is used for
+      # one thing: creating and publishing the release and its assets.
+      contents: write
+    env:
+      TAG: ${{ needs.preflight.outputs.tag }}
+      VERSION: ${{ needs.preflight.outputs.version }}
+      COMMIT: ${{ needs.preflight.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+
+      - name: Collect every platform's assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: sparky-assets-*
+          path: dist/release
+          merge-multiple: true
+
+      - name: Verify the complete asset set and write SHA256SUMS plus metadata
+        run: sh tools/release-metadata.sh --dir dist/release --version "$VERSION" --commit "$COMMIT" --notes dist/RELEASE_NOTES.md
+
+      - name: Publish with gh (draft first, never overwriting a published release)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: sh tools/release-publish.sh --dir dist/release --tag "$TAG" --commit "$COMMIT" --repo "$GITHUB_REPOSITORY" --notes dist/RELEASE_NOTES.md

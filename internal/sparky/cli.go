@@ -15,8 +15,8 @@ import (
 	"strings"
 )
 
-// cliVersion matches the Python package version.
-const cliVersion = "0.6.2"
+// cliVersion and cliCommit are declared in version.go: they are link-time
+// variables, not constants, so release builds can inject them with -ldflags.
 
 // cliInvocation is the structured result of parsing one command line.
 type cliInvocation struct {

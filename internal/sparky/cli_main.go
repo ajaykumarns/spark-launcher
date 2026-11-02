@@ -33,11 +33,12 @@ var errTerminatedCause = errors.New("terminated")
 const cliWorkflowMaxBytes = 8 << 20
 
 // cliInterruptExit and cliTerminateExit are the documented interruption
-// codes; remote work on the device may always continue.
+// codes; remote work on the device may always continue. The version line is
+// rendered by cliVersionLine (version.go) rather than stored in a constant, so
+// link-time -X injection of cliVersion/cliCommit is what actually prints.
 const (
-	cliInterruptExit  = 130
-	cliTerminateExit  = 143
-	cliVersionMessage = "sparky " + cliVersion
+	cliInterruptExit = 130
+	cliTerminateExit = 143
 )
 
 // cliInterruptError is the typed failure for a user-interrupted wait.
@@ -231,7 +232,7 @@ func Main(args []string, in io.Reader, out, errout io.Writer) int {
 	// even in JSON mode; --json never turns them into a model query.
 	if inv.Help || inv.Version {
 		if inv.Version && !inv.Help {
-			fmt.Fprintln(out, cliVersionMessage)
+			fmt.Fprintln(out, cliVersionLine())
 		} else {
 			fmt.Fprintln(out, cliHelpText)
 		}

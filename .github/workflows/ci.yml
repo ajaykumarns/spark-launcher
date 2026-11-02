@@ -1,0 +1,133 @@
+name: CI
+
+# Pull requests and the tip of main. Tag pushes go to release.yml instead.
+#
+# Least privilege: the whole workflow runs with contents:read and no secrets,
+# so code from a fork pull request never executes with a write token. Nothing
+# here deploys, installs, restarts a Spark, loads a model or contacts any
+# machine besides GitHub.
+#
+# Official actions are pinned to full commit SHAs (the tag is in the comment on
+# the same line). Re-pin with, for example:
+#   gh api repos/actions/checkout/git/ref/tags/v7.0.1 --jq .object.sha
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: vet and format (linux/amd64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          check-latest: false
+      - name: Go version
+        run: go version
+      - name: gofmt
+        run: make fmt-check
+      - name: go vet
+        run: make vet
+      - name: Release scripts parse
+        run: |
+          set -eu
+          for script in tools/*.sh; do
+            sh -n "$script"
+            echo "parsed $script"
+          done
+
+  test:
+    name: tests and race (linux/amd64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          check-latest: false
+      - name: Unit tests
+        run: make test
+      - name: Race detector (5m per-package budget)
+        run: make race RACE_TIMEOUT=5m
+      - name: Native CLI and installer link
+        run: |
+          set -eu
+          make build
+          ./dist/sparky --version
+          ./dist/sparky-install --help >/dev/null
+
+  crossbuild:
+    name: crossbuild darwin/arm64 + linux/arm64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          check-latest: false
+      - name: Cross-compile the CLIs and installers
+        run: make crossbuild
+      - name: Cross-compile the menu bar command without cgo
+        run: make menubar-headless
+      - name: Check the produced objects are the advertised platforms
+        run: |
+          set -eu
+          file dist/linux-arm64/sparky | grep -q 'ARM aarch64'
+          file dist/darwin-arm64/sparky | grep -q 'Mach-O.*arm64'
+          ls -l dist/linux-arm64 dist/darwin-arm64
+
+  macos-app:
+    name: Sparky.app (macos-15 arm64)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          check-latest: false
+      - name: Confirm the ARM64 runner
+        run: |
+          set -eu
+          arch=$(uname -m)
+          echo "runner arch: $arch"
+          [ "$arch" = arm64 ] || { echo "expected an arm64 runner" >&2; exit 1; }
+      - name: Native tests
+        run: make test
+      - name: Build the native AppKit app with the bundled CLI
+        run: make menubar
+      - name: Verify the bundle
+        run: |
+          set -eu
+          test -x dist/Sparky.app/Contents/MacOS/sparky-menubar
+          test -f dist/Sparky.app/Contents/Resources/sparky
+          test -f dist/Sparky.app/Contents/Resources/manifest.txt
+          plutil -lint dist/Sparky.app/Contents/Info.plist
+          ./dist/Sparky.app/Contents/Resources/sparky --version
+          if command -v codesign >/dev/null 2>&1; then
+            codesign -dvv dist/Sparky.app 2>&1 | sed -n '1,12p'
+            codesign --verify --deep --strict dist/Sparky.app
+          fi
+      - name: Zip the bundle for inspection
+        run: ditto -c -k --keepParent dist/Sparky.app dist/Sparky.app.zip
+      - name: Upload the bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sparky-app-macos-arm64-ci
+          path: dist/Sparky.app.zip
+          if-no-files-found: error
+          retention-days: 7

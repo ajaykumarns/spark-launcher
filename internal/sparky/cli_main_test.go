@@ -77,7 +77,10 @@ func TestMainHelpAndVersionNeedNoConfig(t *testing.T) {
 			t.Fatalf("%v: code %d stderr %q", args, code, errout)
 		}
 		if len(args) == 1 && args[0] == "--version" {
-			if strings.TrimSpace(out) != "sparky "+cliVersion {
+			// Compare against the rendered line rather than a literal: a
+			// release build injects cliVersion/cliCommit with -ldflags -X, and
+			// this test must stay about dispatch, not about the format.
+			if strings.TrimSpace(out) != cliVersionLine() {
 				t.Fatalf("version output: %q", out)
 			}
 		} else if !strings.Contains(out, "Commands:") {

@@ -275,6 +275,122 @@ The staged folder must contain `models.json`. The first install creates the cent
 
 `sparky` is the sole command. Old `spark`, `spark-models`, and `opencode-spark` commands are removed. There are no compatibility wrappers.
 
+## Releases
+
+Releases are cut from `main` by tag. Use a **stable numeric tag** — `vX.Y.Z`
+only, for example `v0.6.3`. Prerelease and build-metadata spellings such as
+`v0.6.3-rc.1` or `v0.6.3+build7` are rejected, so a published version always
+means an approved `main` commit.
+
+```sh
+git tag v0.6.3
+git push origin v0.6.3
+```
+
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`:
+`go vet`, `go test ./...`, the race detector, both crossbuilds, and a real
+AppKit app build on a macOS ARM64 runner.
+
+Both `ci.yml` and `release.yml` install Go with `go-version-file: .go-version`
+(currently `1.27.3`), the pinned release toolchain, so CI tests exactly the
+compiler that cuts a release. The `go 1.24.0` line in `go.mod` is only the
+language minimum, not the supported release toolchain; `go.mod` and `go.sum`
+stay unchanged.
+
+`.github/workflows/release.yml` builds the tag and **fails closed**: nothing is
+published unless every gate passes.
+
+- The tag is `vX.Y.Z`, peels to a commit reachable from `origin/main`, and
+  still points at that commit when publish runs.
+- `go vet`, the tests, and the race run against the tagged commit, not the
+  moving tip of `main`.
+- Both platforms build from that exact commit and embed its full SHA, so
+  `sparky --version` prints `sparky 0.6.3 (commit <sha>)`. A build from a plain
+  checkout keeps the development default: it prints `sparky 0.6.2` with no
+  commit injected (the version is only written in at release link time).
+- Every archive is unpacked and checked before upload: the CLI must be a real
+  ARM64 executable for its platform, `BUILDINFO.json` must record the tag,
+  version, and commit, and the digests must match what was built.
+
+Each release publishes the same asset set, and each tarball the same layout, so
+install scripts never change between versions:
+
+| Asset | Contents |
+| --- | --- |
+| `sparky-<version>-linux-arm64.tar.gz` | `sparky` and `sparky-install` for both Sparks |
+| `sparky-<version>-darwin-arm64.tar.gz` | `sparky` and `sparky-install` for the Mac |
+| `Sparky-<version>-darwin-arm64.app.zip` | `Sparky.app` menu bar app |
+| `SHA256SUMS` | digest of every asset above |
+| `release-metadata.json` | tag, commit, platforms, and per-file digests |
+
+```
+sparky-<version>-<os>-<arch>/bin/sparky
+sparky-<version>-<os>-<arch>/bin/sparky-install
+sparky-<version>-<os>-<arch>/BUILDINFO.json
+sparky-<version>-<os>-<arch>/LICENSE
+```
+
+Install from a release: download the archive for your platform plus
+`SHA256SUMS`, verify **only the archive you downloaded**, then extract and run
+the bundled installer. `SHA256SUMS` lists all three assets, so checking the
+whole file with a single archive would fail on the two you did not fetch; the
+`awk` filter selects the one line for `${ASSET}` before `shasum`/`sha256sum`
+verifies it.
+
+On the Mac (Apple Silicon):
+
+```sh
+set -eu
+VERSION=0.6.3
+BASE=https://github.com/ajaykumarns/spark-launcher/releases/download/v${VERSION}
+ASSET=sparky-${VERSION}-darwin-arm64.tar.gz
+curl -fLO "${BASE}/${ASSET}"
+curl -fLO "${BASE}/SHA256SUMS"
+awk -v a="${ASSET}" '$2 == a' SHA256SUMS | shasum -a 256 -c -
+tar -xzf "${ASSET}"
+./sparky-${VERSION}-darwin-arm64/bin/sparky-install \
+    --source ./sparky-${VERSION}-darwin-arm64/bin/sparky
+sparky --version
+```
+
+On each Spark (Linux ARM64), use the `linux-arm64` archive and `sha256sum`:
+
+```sh
+set -eu
+VERSION=0.6.3
+BASE=https://github.com/ajaykumarns/spark-launcher/releases/download/v${VERSION}
+ASSET=sparky-${VERSION}-linux-arm64.tar.gz
+curl -fLO "${BASE}/${ASSET}"
+curl -fLO "${BASE}/SHA256SUMS"
+awk -v a="${ASSET}" '$2 == a' SHA256SUMS | sha256sum -c -
+tar -xzf "${ASSET}"
+./sparky-${VERSION}-linux-arm64/bin/sparky-install \
+    --source ./sparky-${VERSION}-linux-arm64/bin/sparky
+sparky --version
+```
+
+The installer keeps a private backup of the previous binary and replaces the
+target atomically, so an interrupted install leaves the old binary serving (see
+*Install and verify*). Unzip `Sparky-${VERSION}-darwin-arm64.app.zip` from the
+same `${BASE}` URL and copy `Sparky.app` to `~/Applications`; the app is signed
+ad-hoc by the build runner and is **not notarized**, so Gatekeeper warns on
+first launch.
+
+Build the same artifacts locally without publishing them:
+
+```sh
+make release-linux VERSION=0.6.3 COMMIT=$(git rev-parse HEAD)
+make release-macos VERSION=0.6.3 COMMIT=$(git rev-parse HEAD)
+```
+
+They land in `dist/release/` with the per-platform `SHA256SUMS.<os>-<arch>`
+files; only the workflow's publish step uploads anything.
+
+Nothing in the release path deploys, installs, or restarts anything. The
+workflow creates a GitHub Release with assets attached and nothing more —
+downloading, installing, and restarting Spark stay explicit operator actions,
+and publishing never overwrites an already published release.
+
 ## macOS menu bar
 
 A native status icon opens a standard macOS menu: Sparky and the current state, the
