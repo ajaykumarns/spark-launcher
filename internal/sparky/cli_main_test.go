@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -40,6 +41,25 @@ func writeMainConfig(t *testing.T, gateway string) {
 		"remote_root": "/srv", "admin_url": "https://ui.example/ui",
 	}
 	b, _ := json.Marshal(raw)
+	if err := os.WriteFile(clientPath(), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setMainConfigBinaries points binaries.* at test-owned paths, leaving the
+// rest of the client configuration untouched.
+func setMainConfigBinaries(t *testing.T, binaries Object) {
+	t.Helper()
+	raw, err := os.ReadFile(clientPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg Object
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg["binaries"] = binaries
+	b, _ := json.Marshal(cfg)
 	if err := os.WriteFile(clientPath(), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -536,11 +556,29 @@ func TestMainHarnessDryRunPrepareAndChildCode(t *testing.T) {
 	writeMainConfig(t, server.URL)
 	hermes := t.TempDir()
 	t.Setenv("HERMES_HOME", hermes)
+	// Harness resolution is test-owned: an isolated PATH hides the harnesses
+	// installed on the developer machine or the CI image, and binaries.hermes
+	// below resolves to a stub rather than anything on the host.
+	emptyBin := filepath.Join(t.TempDir(), "empty-bin")
+	if err := os.MkdirAll(emptyBin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", emptyBin)
+	hermesStub := filepath.Join(t.TempDir(), "hermes")
+	hermesMarker := filepath.Join(t.TempDir(), "hermes-executed")
+	stub := fmt.Sprintf("#!/bin/sh\nprintf executed > '%s'\nexit 9\n", hermesMarker)
+	if err := os.WriteFile(hermesStub, []byte(stub), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	setMainConfigBinaries(t, Object{"hermes": hermesStub})
 
 	// Dry-run writes no settings and prints the plan.
 	code, out, errout := runMain([]string{"hermes", "--dry-run", "--json"}, "")
 	if code != 0 || !strings.Contains(out, `"harness": "hermes"`) || !strings.Contains(out, `"prepared": false`) {
 		t.Fatalf("dry run: %d %q %q", code, out, errout)
+	}
+	if !strings.Contains(out, strconv.Quote(hermesStub)) {
+		t.Fatalf("dry run plan does not use the test stub: %q", out)
 	}
 	if _, err := os.Stat(filepath.Join(hermes, "config.yaml")); !os.IsNotExist(err) {
 		t.Fatal("dry run wrote settings")
@@ -555,22 +593,18 @@ func TestMainHarnessDryRunPrepareAndChildCode(t *testing.T) {
 	if err != nil || !strings.Contains(string(raw), "spark-gateway") {
 		t.Fatalf("prepare settings: %v %s", err, raw)
 	}
+	// The stub leaves a marker and exits 9 whenever it runs: dry-run and
+	// prepare must never have touched the harness binary.
+	if _, err := os.Stat(hermesMarker); !os.IsNotExist(err) {
+		t.Fatal("dry-run/prepare executed the hermes stub")
+	}
 
 	// A real launch returns the own helper child's exact exit code (143).
 	bin := filepath.Join(t.TempDir(), "fakeclaude")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 143\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	raw2, _ := os.ReadFile(clientPath())
-	var cfg Object
-	if err := json.Unmarshal(raw2, &cfg); err != nil {
-		t.Fatal(err)
-	}
-	cfg["binaries"] = Object{"claude": bin}
-	b, _ := json.Marshal(cfg)
-	if err := os.WriteFile(clientPath(), b, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	setMainConfigBinaries(t, Object{"claude": bin})
 	code, _, errout = runMain([]string{"claude"}, "")
 	if code != 143 {
 		t.Fatalf("child code not preserved: %d %q", code, errout)
