@@ -83,26 +83,40 @@ A placement change applies on the next load. Use a plan first to see which idle 
 
 ### Load a model on one node
 
-Select a supported placement before loading. For example, Qwen Flash Next's example
-configuration has recipes for either Spark:
+Use `--on` to select a placement for one load. For example, Qwen Flash Next's
+example configuration has recipes for either Spark:
 
 ```sh
 sparky config show qwen3.8-flash-next
 sparky plan load qwen3.8-flash-next --on spark01
-sparky config placement qwen3.8-flash-next spark01
-sparky load qwen3.8-flash-next
+sparky load qwen3.8-flash-next --on spark01
 sparky status
 ```
 
-Use `spark02` instead of `spark01` to select Spark 2. The plan is read-only.
-`config placement` saves the choice for later loads; it does not move a running
-model immediately. `load` applies the saved placement after active work finishes.
-There is no `sparky load --on` option.
+Use `spark02` instead of `spark01` to select Spark 2. Use `both` for a configured
+two-device recipe. The plan is read-only. `load` waits for active work to finish.
+The override does not change the saved `run_on` value. A later load without
+`--on` uses that saved value. Requests use the actual loaded placement.
 
-A model must have a recipe for the requested node in its `settings`. A model
-with only a `both` recipe cannot be loaded on one node with this command.
-The checked-in DeepSeek example has only a `both` recipe. Check your deployed
-configuration with `sparky config show <model>` before changing placement.
+To save a default for later loads, use:
+
+```sh
+sparky config placement qwen3.8-flash-next spark01
+```
+
+This configuration command does not move a running model. The next load without
+`--on` applies the saved placement.
+
+A model must have an enabled recipe for the requested placement in its `settings`.
+The checked-in DeepSeek example has only a `both` recipe. A single-node override
+for that model fails before Sparky cancels requests or stops models, including
+with `--force`. Check your deployed configuration with
+`sparky config show <model>` before selecting a placement.
+
+Per-load placement requires the native lifecycle. Update the client CLI, private
+node binary, and running controller together before using `load --on`. The node
+checks controller support before it sends the load command. It rejects an older
+controller that cannot apply the override.
 
 ## Resource control
 
