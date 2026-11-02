@@ -267,6 +267,9 @@ A native status icon opens a standard macOS menu: Sparky and the current state, 
 real loaded model and placement, in-use / total memory per Spark, active
 requests, a Load model submenu, Refresh status, and the last update time.
 Settings holds start-at-login, show-title, and diagnostics. Quit is a main menu item.
+
+![Sparky native macOS menu showing the active model, per-device memory, and Settings submenu](docs/images/sparky-menu.png)
+
 Build and launch the menu app on macOS:
 
 ```sh
