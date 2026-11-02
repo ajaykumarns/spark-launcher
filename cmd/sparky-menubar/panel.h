@@ -5,7 +5,7 @@
 
 // Minimal string/flag bridge between Go (business logic) and AppKit (view).
 // Go never runs AppKit calls off the main thread; every sparky_* function may
-// be called from any goroutine and dispatches to the main queue internally.
+// be called from any goroutine and schedules work on the main run loop.
 // Text is copied by AppKit before returning, so Go string memory is not kept.
 
 // sparky_init synchronously creates NSApplication (accessory policy) and the
@@ -17,7 +17,7 @@ void sparky_init(void);
 void sparky_run(void);
 void sparky_quit(void);
 
-// Panel text content. Pass NULL/"“" for optional lines to hide them.
+// Native menu text content. Pass NULL/"" for optional lines to hide them.
 void sparky_set_panel(const char *headerTitle, const char *headerState,
                       const char *modelCaption, const char *modelName,
                       const char *modelLocation,
@@ -32,8 +32,8 @@ void sparky_set_extra_models(const char **lines, int count);
 void sparky_set_memory_rows(const char **labels, const char **values, int count);
 void sparky_set_requests(const char *label, const char *value);
 
-// Picker content. picking is Go's authoritative mode. Choice buttons are only
-// rebuilt when labels/IDs change, preserving keyboard focus across renders.
+// Model submenu content. Native items are rebuilt only when labels/IDs change,
+// and structural changes wait until submenu tracking finishes.
 void sparky_set_picker(int picking, const char *pickerCaption,
                        const char **labels, const char **ids, int count);
 
@@ -41,7 +41,7 @@ void sparky_set_picker(int picking, const char *pickerCaption,
 void sparky_set_enabled(int loadEnabled, int refreshEnabled, int hasCLI);
 void sparky_set_settings(int showTitle, int loginEnabled);
 
-// Show or hide the popover (presentation only; never cancels work). Visibility
+// Show or hide the menu (presentation only; never cancels work). Visibility
 // is not queryable across threads: AppKit state is only read on the main thread.
 void sparky_show_panel(void);
 void sparky_hide_panel(void);
@@ -50,7 +50,7 @@ void sparky_hide_panel(void);
 void sparky_set_icon_state(int state, const char *title);
 
 // Headless construction probe support (used only by native tests). Builds the
-// panel controller/popover in memory with no status item, window, or GUI loop.
+// menus in memory with no status item, window, or application loop.
 // Call on the main thread; never dispatches to an unpumped main queue.
 int sparky_probe_build_panel(void);
 int sparky_probe_choice_count(void);

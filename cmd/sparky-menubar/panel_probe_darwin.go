@@ -18,15 +18,15 @@ import "unsafe"
 // All probe helpers are main-thread-only and return an error code rather than
 // dispatching, so tests never wait on an unpumped main queue.
 
-// probeBuildPanel builds the real panel controller/popover object graph in
+// probeBuildPanel builds the real native menu object graph in
 // memory. It creates no status item, no window, shows nothing, and does not
 // run NSApp's event loop.
 func probeBuildPanel() int { return int(C.sparky_probe_build_panel()) }
 
-// probeChoiceRows reports how many choice rows the real picker stack holds.
+// probeChoiceRows reports how many native model choice items exist.
 func probeChoiceRows() int { return int(C.sparky_probe_choice_count()) }
 
-// probePickerCaption reports the picker caption the view is showing. The C side
+// probePickerCaption reports the current catalog status. The C side
 // returns a strdup'd copy, which is freed here.
 func probePickerCaption() string {
 	p := C.sparky_probe_picker_caption()

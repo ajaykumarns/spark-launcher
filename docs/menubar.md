@@ -1,6 +1,6 @@
 # Sparky menu bar (macOS)
 
-A native macOS status icon that opens a compact 360 pt popover panel. It shows
+A native macOS status icon that opens a standard macOS menu. It shows
 the Sparks' live model state and lets you explicitly load a model. All business
 logic, state, and CLI work stay in Go: the app runs the existing `sparky` CLI in
 the background with `--json`. A small AppKit bridge only draws the view. There is
@@ -84,9 +84,10 @@ CLI resolution order (never the GUI shell `PATH`):
 Only one app instance runs at a time (lock at `$SPARKY_STATE_DIR/menubar.lock`,
 default `~/.local/state/sparky/menubar.lock`).
 
-## The panel
+## The menu
 
-Click the status icon to open a compact card:
+Click the status icon to open the menu. AppKit draws its surface, spacing,
+highlighting, keyboard navigation, and submenus.
 
 - Header: "Sparky" with the current state word: Ready, Loading, Idle,
   Stopping, Unreachable, Failed, or Unknown.
@@ -111,9 +112,9 @@ unreachable. Opening the panel also requests a refresh.
 
 ## Loading a model
 
-"Load model…" replaces the body with a picker listing the configured concrete
+"Load model…" opens a native submenu listing the configured concrete
 models from `sparky --json models` (the synthetic `spark-auto` route is not
-offered). "Back" returns to the overview. One click then runs
+offered). One click runs
 `sparky --json load <canonical-id>` in the background.
 
 - Only one load runs at a time; duplicate clicks are refused.
@@ -127,7 +128,7 @@ offered). "Back" returns to the overview. One click then runs
 
 ## Settings
 
-A gear in the footer opens a small settings menu, so the panel stays focused:
+"Settings" opens a standard submenu:
 
 - "Start at login" (off by default; toggles a per-user LaunchAgent at
   `~/Library/LaunchAgents/local.sparky.menubar.plist`, no admin rights, does not
@@ -136,7 +137,8 @@ A gear in the footer opens a small settings menu, so the panel stays focused:
 - "Copy diagnostics": version, CLI path or error, preferences, status and
   staleness, last error, last load error, refresh result, per-node memory, and
   loaded models. No secrets.
-- "Quit Sparky".
+
+"Quit Sparky" is at the bottom of the main menu and supports Command-Q.
 
 Preferences live in `$SPARKY_STATE_DIR/menubar-prefs.json` (default
 `~/.local/state/sparky/menubar-prefs.json`).

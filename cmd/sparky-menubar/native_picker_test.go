@@ -22,11 +22,8 @@ var (
 	nativeLayoutErr  error
 )
 
-// nativePickerCase drives the real sparky_set_picker bridge headlessly: no
-// status item, no window, no NSApp event loop, no images, no CLI or model calls.
-// Before the fix, each choice button activated its width constraint against
-// choiceStack before being added as a subview, so AppKit raised NSException
-// ("no common ancestor") and terminated the app during catalog delivery.
+// Exercise native model menu construction and replacement without a status
+// item, window, NSApp event loop, images, CLI or model calls.
 func nativePickerCase() error {
 	if code := probeBuildPanel(); code != 0 {
 		return fmt.Errorf("headless panel construction failed (code %d)", code)
@@ -107,13 +104,13 @@ func nativeLayoutCase() error {
 	return nil
 }
 
-func TestNativeLayout(t *testing.T) {
+func TestNativeMenuLayoutAndTracking(t *testing.T) {
 	if nativeLayoutErr != nil {
 		t.Fatal(nativeLayoutErr)
 	}
 }
 
-func TestNativePickerInsertionOrder(t *testing.T) {
+func TestNativeModelMenuUpdates(t *testing.T) {
 	if !nativeStartupRan {
 		t.Fatal("native probe case did not run")
 	}
