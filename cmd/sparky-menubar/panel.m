@@ -539,7 +539,8 @@ static void SizePopover(void) {
     CGFloat h = fit.height;
     if (h < 320) h = 320;
     vc.view.frame = NSMakeRect(0, 0, kPanelWidth, h);
-    if (gPopover.contentSize.height != h || gPopover.contentSize.width != kPanelWidth) {
+    // A headless construction probe builds the controller without a popover.
+    if (gPopover && (gPopover.contentSize.height != h || gPopover.contentSize.width != kPanelWidth)) {
         gPopover.contentSize = NSMakeSize(kPanelWidth, h);
     }
 }
@@ -556,6 +557,19 @@ static void InitApplication(void) {
     }
 }
 
+// Build the panel controller and popover. Shared by the real app bootstrap and
+// the headless construction probe so both exercise identical object graphs.
+// Must run on the main thread; creates no window and shows nothing.
+static void BuildPanelObjects(void) {
+    if (gController) return;
+    gController = [[SparkyPanelController alloc] init];
+    [gController loadView];
+    gPopover = [[NSPopover alloc] init];
+    gPopover.behavior = NSPopoverBehaviorTransient;
+    gPopover.contentViewController = gController;
+    SizePopover();
+}
+
 void sparky_init(void) {
     if (![NSThread isMainThread]) return; // must be the locked main OS thread
     @autoreleasepool {
@@ -565,13 +579,7 @@ void sparky_init(void) {
         gItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
         gItem.button.imagePosition = NSImageOnly;
 
-        gController = [[SparkyPanelController alloc] init];
-        [gController loadView];
-
-        gPopover = [[NSPopover alloc] init];
-        gPopover.behavior = NSPopoverBehaviorTransient;
-        gPopover.contentViewController = gController;
-        SizePopover();
+        BuildPanelObjects();
 
         // Clicking the status item toggles the popover; it never cancels work.
         gItem.button.target = gController;
@@ -755,8 +763,12 @@ void sparky_set_picker(int picking, const char *pickerCaption,
                 b.tag = (NSInteger)i;
                 b.identifier = idv[i];
                 b.target = c;
-                [b.widthAnchor constraintEqualToAnchor:c.choiceStack.widthAnchor].active = YES;
+                // Add to the stack FIRST: a width constraint between the button
+                // and the stack needs a common ancestor at activation time, or
+                // AppKit raises NSGenericException ("no common ancestor") and
+                // terminates the app during catalog delivery.
                 [c.choiceStack addArrangedSubview:b];
+                [b.widthAnchor constraintEqualToAnchor:c.choiceStack.widthAnchor].active = YES;
             }
         }
         [c applyPicking:(picking != 0)];
@@ -780,4 +792,50 @@ void sparky_set_settings(int showTitle, int loginEnabled) {
         gLoginEnabled = loginEnabled ? YES : NO;
         c.settingsButton.toolTip = @"Settings";
     });
+}
+
+// MARK: - Headless construction probe (test support)
+
+// Build only the in-memory panel controller/popover object graph and report
+// whether it constructed cleanly. Creates no status item, no window, shows
+// nothing and never runs the NSApplication event loop.
+//
+// The probe does NOT initialize NSApplication and does NOT dispatch to the main
+// queue: the native test runs it synchronously on the locked process main
+// thread, where OnMain's isMainThread branch executes inline. Returns 0 on
+// success, 1 on an AppKit exception, 2 when not on the main thread.
+int sparky_probe_build_panel(void) {
+    if (![NSThread isMainThread]) return 2;
+    @try {
+        @autoreleasepool { BuildPanelObjects(); }
+        return 0;
+    } @catch (NSException *ex) {
+        NSLog(@"sparky panel construction probe raised %@: %@", ex.name, ex.reason);
+        return 1;
+    }
+}
+
+// Report the number of choice rows currently arranged in the picker stack, so
+// the regression can prove the real picker path rebuilt rows.
+int sparky_probe_choice_count(void) {
+    if (![NSThread isMainThread] || !gController) return -1;
+    @try {
+        return (int)Controller().choiceStack.arrangedSubviews.count;
+    } @catch (NSException *ex) {
+        NSLog(@"sparky panel probe choice count raised %@: %@", ex.name, ex.reason);
+        return -1;
+    }
+}
+
+// Report the picker caption the view is showing as a caller-owned strdup'd
+// copy (freed by the Go wrapper), so cgo never retains an AppKit pointer.
+char *sparky_probe_picker_caption(void) {
+    if (![NSThread isMainThread] || !gController) return NULL;
+    @try {
+        NSString *s = Controller().pickerCaption.stringValue ?: @"";
+        return strdup(s.UTF8String ?: "");
+    } @catch (NSException *ex) {
+        NSLog(@"sparky panel probe caption raised %@: %@", ex.name, ex.reason);
+        return NULL;
+    }
 }

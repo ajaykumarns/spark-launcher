@@ -49,4 +49,11 @@ void sparky_hide_panel(void);
 // Icon state: 0 normal, 1 loading, 2 error. Optional title text.
 void sparky_set_icon_state(int state, const char *title);
 
+// Headless construction probe support (used only by native tests). Builds the
+// panel controller/popover in memory with no status item, window, or GUI loop.
+// Call on the main thread; never dispatches to an unpumped main queue.
+int sparky_probe_build_panel(void);
+int sparky_probe_choice_count(void);
+char *sparky_probe_picker_caption(void);
+
 #endif
