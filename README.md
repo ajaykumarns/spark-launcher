@@ -81,6 +81,29 @@ sparky load qwen
 
 A placement change applies on the next load. Use a plan first to see which idle models must leave memory. Resource plans never stop services.
 
+### Load a model on one node
+
+Select a supported placement before loading. For example, Qwen Flash Next's example
+configuration has recipes for either Spark:
+
+```sh
+sparky config show qwen3.8-flash-next
+sparky plan load qwen3.8-flash-next --on spark01
+sparky config placement qwen3.8-flash-next spark01
+sparky load qwen3.8-flash-next
+sparky status
+```
+
+Use `spark02` instead of `spark01` to select Spark 2. The plan is read-only.
+`config placement` saves the choice for later loads; it does not move a running
+model immediately. `load` applies the saved placement after active work finishes.
+There is no `sparky load --on` option.
+
+A model must have a recipe for the requested node in its `settings`. A model
+with only a `both` recipe cannot be loaded on one node with this command.
+The checked-in DeepSeek example has only a `both` recipe. Check your deployed
+configuration with `sparky config show <model>` before changing placement.
+
 ## Resource control
 
 The controller runs as `sparky-controller.service` on Spark 1. In legacy mode, the existing llama-swap manager handles explicit model loading and unloading (the native lifecycle has its own supervisor). Inference cannot start a stopped model. Idle unloading is disabled. Sparky derives its compatibility matrix from the central model placements. Nemotron on Spark 1 and Qwen on Spark 2 can run together. The two-device models require both nodes.
@@ -244,8 +267,22 @@ A native status icon opens a standard macOS menu: Sparky and the current state, 
 real loaded model and placement, in-use / total memory per Spark, active
 requests, a Load model submenu, Refresh status, and the last update time.
 Settings holds start-at-login, show-title, and diagnostics. Quit is a main menu item.
-Build and package it with `make menubar` (see [docs/menubar.md](docs/menubar.md)
-for flags, install, settings, and signing vs notarization). Go keeps all
+Build and launch the menu app on macOS:
+
+```sh
+make menubar
+ditto --norsrc --noextattr dist/Sparky.app ~/Applications/Sparky.app
+open ~/Applications/Sparky.app
+```
+
+The bundle includes the CLI. Loading a model from the menu runs that CLI in the
+background. Closing the menu does not cancel a load. Start at login is opt-in.
+The native menu uses system spacing, keyboard navigation, checkmarks, and
+submenus. It displays per-device memory; it does not combine the Sparks into
+one memory budget.
+
+See [docs/menubar.md](docs/menubar.md)
+for flags, install, settings, and signing vs notarization. Go keeps all
 business logic and runs the existing CLI in the background; a small AppKit
 bridge only draws the view. It never loads a model on its own, and never unloads
 or cancels remote work when you quit.
