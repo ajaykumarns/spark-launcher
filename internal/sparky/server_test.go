@@ -72,8 +72,12 @@ func (f *fakeController) Plan(model, action, on string) (Object, error) {
 	f.plans++
 	return Object{"workload": model}, nil
 }
-func (f *fakeController) Load(model string, force bool) (Object, error) {
-	return Object{"workload": model}, nil
+func (f *fakeController) Load(model string, force bool, on string) (Object, error) {
+	result := Object{"workload": model}
+	if on != "" {
+		result["on"] = on
+	}
+	return result, nil
 }
 func (f *fakeController) Unload(model string, force bool) (Object, error) {
 	return Object{"workload": model}, nil

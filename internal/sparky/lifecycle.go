@@ -14,16 +14,110 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// runtimeSelection is the COMPLETE placement a model really runs at: the
+// model entry, the frozen recipe, the exact nodes and placement plus the
+// backend identity that recipe binds. It is resolved from the durable
+// lifecycle record under strong policy (validated record, enabled current
+// model, matching llm kind and matching topology) — never trusted verbatim
+// from a raw record and never read from the saved run_on alone.
+type runtimeSelection struct {
+	Model     Object
+	Setting   Object
+	Nodes     []string
+	Placement string
+	Record    Object // validated durable record for an Actual selection
+	Actual    bool   // true when resolved from a loaded durable record
+}
+
+// loadedSelection resolves the ACTUAL loaded placement of name from its
+// durable record. Only a READY (or in-progress queued/starting) record is
+// considered, and the record's own placement, nodes, units and frozen
+// recipe must all agree with the current config before it is used: a raw
+// record is never trusted. The current model must be enabled and a
+// language model under the current policy, with an unchanged node topology.
+// When no valid loaded record exists the desired (saved run_on) selection
+// is returned with Actual=false.
+func (r *Runtime) loadedSelection(name string) (*runtimeSelection, error) {
+	return r.loadedSelectionWith(r.config(), name)
+}
+
+func (r *Runtime) loadedSelectionWith(cfg Object, name string) (*runtimeSelection, error) {
+	m, s, nodes, placement, err := selectPlacement(cfg, name, "")
+	if err != nil {
+		return nil, err
+	}
+	target := &runtimeSelection{Model: m, Setting: s, Nodes: nodes, Placement: placement}
+	if !r.native() {
+		return target, nil
+	}
+	if m == nil || str(m["kind"]) != "llm" || !boolean(value(m, "enabled", true)) {
+		return target, nil
+	}
+	rec, err := r.readRecord(name)
+	if err != nil {
+		return target, nil
+	}
+	switch str(rec["state"]) {
+	case StateReady, StateStarting, StateQueued:
+	default:
+		return target, nil
+	}
+	placement = str(rec["placement"])
+	settings := obj(m["settings"])
+	frozen, found := settings[placement]
+	if !found || placements[placement] == nil {
+		return target, nil
+	}
+	s = obj(frozen)
+	if !boolean(value(s, "enabled", true)) {
+		return target, nil
+	}
+	units := Object{}
+	for _, node := range placements[placement] {
+		unit := str(obj(s["units"])[node])
+		if unit == "" || !serviceName.MatchString(unit) {
+			return target, nil
+		}
+		units[node] = unit
+	}
+	recorded := stringsOf(rec["nodes"])
+	if !sameStrings(recorded, placements[placement]) {
+		return target, nil
+	}
+	recordUnits := obj(rec["units"])
+	for node, unit := range units {
+		if str(recordUnits[node]) != str(unit) {
+			return target, nil
+		}
+	}
+	// The record must be the very recipe and topology this config selects:
+	// a matching fingerprint and a matching recorded node topology (ssh host
+	// and direct IP per selected node, controller root).
+	if str(rec["fingerprint"]) != lifecycleFingerprint(name, m, s, placements[placement], placement) {
+		return target, nil
+	}
+	if !topologyMatches(obj(rec["config"]), cfg, placements[placement]) {
+		return target, nil
+	}
+	return &runtimeSelection{Model: target.Model, Setting: s, Nodes: placements[placement], Placement: placement,
+		Record: rec, Actual: true}, nil
+}
+
 // ready resolves the placement and dispatches to the mode-specific check.
 // The native branch is the strong stage-1 readiness; the legacy branch keeps
 // its historical health-200 shortcut unchanged.
 func (r *Runtime) ready(ctx context.Context, name string, setting Object, nodes []string) bool {
 	if r.native() {
-		m, _, n, placement, err := selectPlacement(r.config(), name, "")
-		if err != nil || !sameStrings(n, nodes) {
+		// The loaded placement is the ACTUAL validated selection of the
+		// durable record, which may differ from the saved run_on after a
+		// one-shot load or a pending run_on change. The nodes argument must
+		// still be exactly the nodes this selection resolved: readiness is
+		// never granted for a caller's invented node set.
+		sel, err := r.loadedSelection(name)
+		if err != nil || !sameStrings(sel.Nodes, nodes) {
 			return false
 		}
-		return r.nativeReady(ctx, name, m, setting, n, placement)
+		return r.nativeReady(ctx, name, sel.Model, sel.Setting, sel.Nodes, sel.Placement)
 	}
 	path := filepath.Join(r.root(), "controller", "running-"+name+".json")
 	record, err := readObject(path)

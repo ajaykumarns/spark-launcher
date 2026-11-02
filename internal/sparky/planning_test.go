@@ -52,6 +52,19 @@ func TestMakePlanNeverEvictsProtectedModels(t *testing.T) {
 	}
 }
 
+// TestMakePlanHonoursProtectedModelsPolicy proves the plan preview refuses
+// to evict a model protected through policy.protected_models even when its
+// snapshot row lacks keep_loaded (the snapshot only carries loaded state).
+func TestMakePlanHonoursProtectedModelsPolicy(t *testing.T) {
+	c := baseConfig()
+	c["policy"] = Object{"protected_models": []any{"busy"}}
+	c["models"] = Object{"target": llmModel("both"), "busy": llmModel("spark01")}
+	_, err := makePlan(c, "target", planSnapshot(), "load", "")
+	if err == nil || !strings.Contains(err.Error(), "busy") {
+		t.Fatalf("policy-protected model must not be evicted: %v", err)
+	}
+}
+
 func TestMakePlanKeepRunningAndPlacementMoves(t *testing.T) {
 	c := baseConfig()
 	c["models"] = Object{"target": llmModel("spark01")}

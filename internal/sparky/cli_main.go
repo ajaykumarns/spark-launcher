@@ -326,6 +326,11 @@ func cliDispatch(ctx context.Context, cfg clientConfig, inv *cliInvocation, in i
 	case "run":
 		return cliRunCommand(ctx, cfg, inv, out, errout)
 	case "load", "unload":
+		// An explicit --on is a one-load placement override. Validate it
+		// locally against the same grammar BEFORE any remote spawn.
+		if on, ok := inv.Values["on"]; ok && (inv.Command != "load" || !contains(cliPlacements, on)) {
+			return cliErrorExit(inv, usagef("--on is available only for load and must be one of %s%s", strings.Join(cliPlacements, ", "), cliUsageSuffix), out, errout)
+		}
 		return cliLoadCommand(ctx, cfg, inv, out, errout)
 	case "sync":
 		return cliSyncCommand(ctx, cfg, inv, out, errout)
@@ -555,8 +560,9 @@ func cliReadWorkflow(path string) (Object, error) {
 func cliLoadCommand(ctx context.Context, cfg clientConfig, inv *cliInvocation, out, errout io.Writer) int {
 	action, model := inv.Command, inv.Positional[0]
 	force := inv.Flags["force"]
+	on := inv.Values["on"]
 	if !inv.JSON && !force {
-		plan, err := cliRemoteRPC(ctx, cfg, "plan", Object{"action": action, "model": model})
+		plan, err := cliRemoteRPC(ctx, cfg, "plan", Object{"action": action, "model": model, "on": cliValueOrNil(inv, "on")})
 		if err != nil {
 			return cliErrorExit(inv, cliInterruptErr(ctx, err), out, errout)
 		}
@@ -582,12 +588,27 @@ func cliLoadCommand(ctx context.Context, cfg clientConfig, inv *cliInvocation, o
 		message = "Forcing " + action + " " + model + ". Conflicting language requests will stop."
 	}
 	stop := cliProgress(message, !inv.JSON, force)
-	data, err := cliRemoteResult(ctx, cfg, action, model, force)
+	data, err := cliRemoteResult(ctx, cfg, action, model, force, on)
 	stop()
 	if err != nil {
 		return cliErrorExit(inv, cliInterruptErr(ctx, err), out, errout)
 	}
-	return cliEmitResult(inv, action, data, out)
+	view := data
+	if on != "" {
+		// An explicit one-shot placement is only reported when the
+		// controller CONFIRMS the actual placement and nodes. The CLI never
+		// manufactures them from the request: a missing or contradictory
+		// acknowledgment means the controller is old or the load landed
+		// elsewhere, and must be an error.
+		confirmed := str(data["placement"])
+		nodes := stringsOf(data["nodes"])
+		if confirmed != on || len(nodes) != len(placements[on]) || !sameStrings(nodes, placements[on]) {
+			return cliErrorExit(inv, fail("The controller did not confirm the requested placement %s for %s. The controller may need an upgrade and restart; no placement change is reported.", on, model), out, errout)
+		}
+		view = copyObject(data)
+		delete(view, "placement_source")
+	}
+	return cliEmitResult(inv, action, view, out)
 }
 
 // cliSyncCommand refreshes the Hermes provider and reports the exact
@@ -687,7 +708,7 @@ func cliAdminCommand(ctx context.Context, cfg clientConfig, inv *cliInvocation, 
 		return code
 	case "enable-harnesses":
 		stop := cliProgress("Configuring gateway protocol routes...", !inv.JSON, false)
-		data, err := cliRemoteResult(ctx, cfg, "gateway", "", false)
+		data, err := cliRemoteResult(ctx, cfg, "gateway", "", false, "")
 		stop()
 		if err != nil {
 			return cliErrorExit(inv, cliInterruptErr(ctx, err), out, errout)

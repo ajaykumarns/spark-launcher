@@ -53,7 +53,7 @@ type Controller interface {
 	Fenced() bool
 	Fence(enabled bool)
 	Plan(model, action, on string) (Object, error)
-	Load(model string, force bool) (Object, error)
+	Load(model string, force bool, on string) (Object, error)
 	Unload(model string, force bool) (Object, error)
 	SetPlacement(model, on string) (Object, error)
 	SubmitComfy(workflow Object, on string) (Object, error)
@@ -518,8 +518,20 @@ func (s *controllerServer) serveControl(w http.ResponseWriter, r *http.Request, 
 		var result Object
 		var err error
 		if path == "/control/load" {
-			result, err = s.ctrl.Load(model, force)
+			on := ""
+			if raw, has := body["on"]; has && raw != nil {
+				on = str(raw)
+				if placements[on] == nil {
+					s.failRequest(w, http.StatusBadRequest, "on must be spark01, spark02, or both.")
+					return
+				}
+			}
+			result, err = s.ctrl.Load(model, force, on)
 		} else {
+			if raw, has := body["on"]; has && raw != nil {
+				s.failRequest(w, http.StatusBadRequest, "on is available only for load.")
+				return
+			}
 			result, err = s.ctrl.Unload(model, force)
 		}
 		if err != nil {

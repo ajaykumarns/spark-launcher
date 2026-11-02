@@ -28,6 +28,10 @@ import (
 	"time"
 )
 
+// controllerSeam replaces the loopback controller HTTP call in tests; nil in
+// production, where controllerRequest always talks to 127.0.0.1.
+var controllerSeam func(context.Context, string, any) (Object, error)
+
 // parseNodeFlags parses "--name value" style flags strictly. Unknown flags,
 // duplicate flags, missing values, and unexpected positional arguments are
 // rejected. Booleans are declared explicitly. positionals allows exactly the
@@ -146,7 +150,8 @@ func nodePayloadFile(in io.Reader, path string) (Object, error) {
 
 // controllerRequest calls the localhost controller. It mirrors control.py
 // controller_request: configuration comes from the cluster file and load and
-// unload use the long timeout.
+// unload use the long timeout. controllerSeam is a test seam that replaces
+// the loopback HTTP call; nil in production.
 func controllerRequest(ctx context.Context, root, operation string, payload any) (Object, error) {
 	if !simpleName.MatchString(operation) {
 		return nil, fail("Unknown controller operation.")
@@ -154,6 +159,9 @@ func controllerRequest(ctx context.Context, root, operation string, payload any)
 	cfg, err := readCluster(filepath.Join(root, "config", "models.json"))
 	if err != nil {
 		return nil, err
+	}
+	if controllerSeam != nil {
+		return controllerSeam(ctx, operation, payload)
 	}
 	port := controllerPort(cfg)
 	if port == 0 {
@@ -172,10 +180,14 @@ func controllerRequest(ctx context.Context, root, operation string, payload any)
 }
 
 // nodeResources mirrors control.py node_resources for status, load, unload.
-func nodeResources(ctx context.Context, root, action, model string, force bool) (Object, error) {
+func nodeResources(ctx context.Context, root, action, model string, force bool, on ...string) (Object, error) {
 	cfg, err := readCluster(filepath.Join(root, "config", "models.json"))
 	if err != nil {
 		return nil, err
+	}
+	override := ""
+	if len(on) > 0 {
+		override = on[0]
 	}
 	switch action {
 	case "status":
@@ -189,11 +201,53 @@ func nodeResources(ctx context.Context, root, action, model string, force bool) 
 		if err != nil {
 			return nil, err
 		}
+		// An explicit placement must be validated against the selected
+		// model's ACTUAL recipe BEFORE the controller changes anything.
+		if override != "" {
+			if action != "load" || placements[override] == nil {
+				return nil, fail("--on is available only for load and must be spark01, spark02, or both.")
+			}
+			// Legacy deployments have no native lifecycle: a one-shot
+			// placement override is refused before any controller write,
+			// exactly like plan (the manager sync/HUP path would ignore it).
+			if str(cfg["lifecycle"]) != "native" {
+				return nil, fail("--on requires the native model lifecycle and cannot be used in legacy mode.")
+			}
+			if _, _, _, _, err := selectPlacement(cfg, name, override); err != nil {
+				return nil, err
+			}
+			// Mixed-version safety: an updated node talking to an OLD still
+			// running controller would have its "on" silently ignored while
+			// the saved placement loads. The READ-ONLY plan must advertise
+			// the override capability before the load (or force) is sent.
+			plan, err := controllerRequest(ctx, root, "plan", Object{"action": action, "model": name, "on": override})
+			if err != nil {
+				return nil, err
+			}
+			if raw, has := plan["placement_override_supported"]; !has || raw != true {
+				return nil, fail("The controller does not support one-shot placement overrides. Restart the updated controller on the machine and try again.")
+			}
+		}
 		payload := Object{"model": name}
 		if force {
 			payload["force"] = true
 		}
-		return controllerRequest(ctx, root, action, payload)
+		if override != "" {
+			payload["on"] = override
+		}
+		result, err := controllerRequest(ctx, root, action, payload)
+		if err != nil {
+			return nil, err
+		}
+		if override != "" {
+			// A one-shot load acknowledges ONLY what the controller confirmed
+			// from the durable record: a missing or contradictory placement is
+			// an old/ignoring controller, never a successful override.
+			if str(result["placement"]) != override || !sameStrings(stringsOf(result["nodes"]), placements[override]) {
+				return nil, fail("The controller did not confirm the requested placement %s for %s. The controller may need an upgrade and restart; no placement change is reported.", override, name)
+			}
+		}
+		return result, nil
 	}
 	return nil, fail("Unknown resource operation.")
 }
@@ -371,7 +425,7 @@ func NodeMain(args []string, in io.Reader) (any, error) {
 
 	case "load", "unload":
 		flags, _, err := parseNodeFlags(rest,
-			map[string]bool{"root": true, "model": true, "force": true}, map[string]bool{"force": true}, 0)
+			map[string]bool{"root": true, "model": true, "force": true, "on": true}, map[string]bool{"force": true}, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -383,7 +437,11 @@ func NodeMain(args []string, in io.Reader) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return nodeResources(ctx, root, action, model, flags.set["force"])
+		on := flags.get("on", "")
+		if on != "" && (action != "load" || placements[on] == nil) {
+			return nil, usagef("--on is available only for load and must be spark01, spark02, or both.")
+		}
+		return nodeResources(ctx, root, action, model, flags.set["force"], on)
 
 	case "supervise":
 		flags, _, err := parseNodeFlags(rest, map[string]bool{"file": true, "model": true}, map[string]bool{}, 0)

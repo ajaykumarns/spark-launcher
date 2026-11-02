@@ -37,7 +37,7 @@ func remoteUseFakeRunner(fake remoteRunner) func() {
 
 func TestCliRemoteCommandValidationAndQuoting(t *testing.T) {
 	cfg := remoteTestConfig()
-	argv, err := cliRemoteCommand(cfg, "load", "glm", true)
+	argv, err := cliRemoteCommand(cfg, "load", "glm", true, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestCliRemoteCommandValidationAndQuoting(t *testing.T) {
 	}
 
 	// Tokens are POSIX-quoted; the prefix is literal.
-	argv, err = cliRemoteCommand(cfg, "load", "glm a'b", false)
+	argv, err = cliRemoteCommand(cfg, "load", "glm a'b", false, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -59,14 +59,14 @@ func TestCliRemoteCommandValidationAndQuoting(t *testing.T) {
 
 	// Validation happens before any spawn.
 	bad := clientConfig{Extra: Object{"admin_ssh_host": "bad host!", "remote_root": "/srv"}}
-	if _, err := cliRemoteCommand(bad, "status", "", false); err == nil || !strings.Contains(err.Error(), "SSH host alias") {
+	if _, err := cliRemoteCommand(bad, "status", "", false, ""); err == nil || !strings.Contains(err.Error(), "SSH host alias") {
 		t.Fatalf("bad host: %v", err)
 	}
 	noRoot := clientConfig{Extra: Object{"admin_ssh_host": "spark01", "remote_root": "srv"}}
-	if _, err := cliRemoteCommand(noRoot, "status", "", false); err == nil || !strings.Contains(err.Error(), "absolute remote_root") {
+	if _, err := cliRemoteCommand(noRoot, "status", "", false, ""); err == nil || !strings.Contains(err.Error(), "absolute remote_root") {
 		t.Fatalf("relative root: %v", err)
 	}
-	if _, err := cliRemoteCommand(cfg, "status", "", true); err == nil || !strings.Contains(err.Error(), "--force is available only for load and unload.") {
+	if _, err := cliRemoteCommand(cfg, "status", "", true, ""); err == nil || !strings.Contains(err.Error(), "--force is available only for load and unload.") {
 		t.Fatalf("force validation: %v", err)
 	}
 	if _, err := cliRemoteRPC(context.Background(), cfg, "bad op!", nil); err == nil {
@@ -240,9 +240,9 @@ func TestCliRemoteJSONTimeoutEnforcement(t *testing.T) {
 		want time.Duration
 	}{
 		{"status", func() (Object, error) { return cliRemoteStatus(context.Background(), cfg) }, 90 * time.Second},
-		{"load", func() (Object, error) { return cliRemoteResult(context.Background(), cfg, "load", "glm", false) }, 7230 * time.Second},
-		{"unload", func() (Object, error) { return cliRemoteResult(context.Background(), cfg, "unload", "", true) }, 7230 * time.Second},
-		{"plan", func() (Object, error) { return cliRemoteResult(context.Background(), cfg, "gateway", "", false) }, 120 * time.Second},
+		{"load", func() (Object, error) { return cliRemoteResult(context.Background(), cfg, "load", "glm", false, "") }, 7230 * time.Second},
+		{"unload", func() (Object, error) { return cliRemoteResult(context.Background(), cfg, "unload", "", true, "") }, 7230 * time.Second},
+		{"plan", func() (Object, error) { return cliRemoteResult(context.Background(), cfg, "gateway", "", false, "") }, 120 * time.Second},
 		{"rpc image-profile", func() (Object, error) { return cliRemoteRPC(context.Background(), cfg, "image-profile", nil) }, 900 * time.Second},
 		{"rpc run", func() (Object, error) { return cliRemoteRPC(context.Background(), cfg, "run", nil) }, 180 * time.Second},
 		{"rpc other", func() (Object, error) { return cliRemoteRPC(context.Background(), cfg, "other", nil) }, 120 * time.Second},
@@ -497,11 +497,11 @@ func TestCliAdminInteractiveExitCodeAndStreams(t *testing.T) {
 
 func TestCliRemoteCommandRejectsUnknownAction(t *testing.T) {
 	cfg := remoteTestConfig()
-	if _, err := cliRemoteCommand(cfg, "deploy", "", false); err == nil || err.Error() != "Unsupported remote action." {
+	if _, err := cliRemoteCommand(cfg, "deploy", "", false, ""); err == nil || err.Error() != "Unsupported remote action." {
 		t.Fatalf("unknown action: %v", err)
 	}
 	for _, action := range []string{"status", "load", "unload", "gateway"} {
-		if _, err := cliRemoteCommand(cfg, action, "", false); err != nil {
+		if _, err := cliRemoteCommand(cfg, action, "", false, ""); err != nil {
 			t.Fatalf("%s rejected: %v", action, err)
 		}
 	}

@@ -79,8 +79,12 @@ func makePlan(c Object, name string, snapshot Object, action, on string) (Object
 			if other == name || str(row["kind"]) != "llm" || !boolean(row["loaded"]) || !overlapNodes(nodes, stringsOf(row["nodes"])) {
 				continue
 			}
-			// Protected models are never evicted, not even with waiting jobs.
-			if boolean(obj(obj(c["models"])[other])["keep_loaded"]) {
+			// Protected models are never evicted, not even with waiting jobs:
+			// the effective policy merges the config keep_loaded and the
+			// protected_models allowlist, exactly like the load path.
+			policyRow := copyObject(row)
+			policyRow["keep_loaded"] = boolean(obj(obj(c["models"])[other])["keep_loaded"]) || boolean(row["keep_loaded"])
+			if effectiveProtected(policyRow, obj(c["policy"]), other) {
 				return nil, fail("%s must stay loaded on the requested device.", other)
 			}
 			if num(row["active_requests"]) > 0 {
