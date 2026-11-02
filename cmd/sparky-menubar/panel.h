@@ -55,5 +55,6 @@ void sparky_set_icon_state(int state, const char *title);
 int sparky_probe_build_panel(void);
 int sparky_probe_choice_count(void);
 char *sparky_probe_picker_caption(void);
+char *sparky_probe_layout(int picking);
 
 #endif

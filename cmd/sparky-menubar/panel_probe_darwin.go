@@ -36,3 +36,16 @@ func probePickerCaption() string {
 	defer C.free(unsafe.Pointer(p))
 	return C.GoString(p)
 }
+
+func probeLayout(picking bool) string {
+	mode := C.int(0)
+	if picking {
+		mode = 1
+	}
+	p := C.sparky_probe_layout(mode)
+	if p == nil {
+		return ""
+	}
+	defer C.free(unsafe.Pointer(p))
+	return C.GoString(p)
+}

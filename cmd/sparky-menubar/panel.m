@@ -28,7 +28,7 @@ static const CGFloat kPanelWidth = 360;
 static const CGFloat kInsetX = 14;
 static const CGFloat kInsetTop = 12;
 static const CGFloat kInsetBottom = 10;
-static const CGFloat kInnerX = 4; // section padding inside the content guide
+static const CGFloat kInnerX = 10; // shared text inset for headings, sections and rows
 
 // MARK: - Small styled views
 
@@ -36,8 +36,8 @@ static NSTextField *MakeLabel(NSString *text, NSFont *font, NSColor *color) {
     NSTextField *f = [NSTextField labelWithString:text ?: @""];
     f.font = font;
     f.textColor = color;
-    f.lineBreakMode = NSLineBreakByWordWrapping;
-    f.maximumNumberOfLines = 0;
+    f.lineBreakMode = NSLineBreakByTruncatingTail;
+    f.maximumNumberOfLines = 1;
     f.focusRingType = NSFocusRingTypeNone;
     f.translatesAutoresizingMaskIntoConstraints = NO;
     [f setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
@@ -46,18 +46,21 @@ static NSTextField *MakeLabel(NSString *text, NSFont *font, NSColor *color) {
 }
 
 static NSTextField *MakeCaption(NSString *text) {
-    return MakeLabel(text, [NSFont systemFontOfSize:11 weight:NSFontWeightRegular],
+    return MakeLabel(text, [NSFont systemFontOfSize:12 weight:NSFontWeightRegular],
                      [NSColor secondaryLabelColor]);
 }
 
 static NSTextField *MakeStrong(NSString *text, CGFloat size) {
-    return MakeLabel(text, [NSFont systemFontOfSize:size weight:NSFontWeightSemibold],
+    return MakeLabel(text, [NSFont systemFontOfSize:size weight:NSFontWeightMedium],
                      [NSColor labelColor]);
 }
 
 static NSTextField *MakeBody(NSString *text) {
-    return MakeLabel(text, [NSFont systemFontOfSize:12 weight:NSFontWeightRegular],
-                     [NSColor secondaryLabelColor]);
+    NSTextField *f = MakeLabel(text, [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
+                               [NSColor secondaryLabelColor]);
+    f.lineBreakMode = NSLineBreakByWordWrapping;
+    f.maximumNumberOfLines = 0;
+    return f;
 }
 
 static NSTextField *MakeValueLabel(NSString *text, CGFloat size, BOOL mono) {
@@ -83,6 +86,8 @@ static NSButton *MakeRowButton(NSString *title, SEL action) {
     b.alignment = NSTextAlignmentLeft;
     b.focusRingType = NSFocusRingTypeExterior;
     b.contentTintColor = [NSColor labelColor];
+    b.lineBreakMode = NSLineBreakByTruncatingTail;
+    b.toolTip = title;
     return b;
 }
 
@@ -95,12 +100,12 @@ static NSStackView *MakePairRow(NSString *left, NSString *right, NSTextField **r
     row.distribution = NSStackViewDistributionFill;
     row.spacing = 8;
     row.translatesAutoresizingMaskIntoConstraints = NO;
-    NSTextField *l = MakeLabel(left, [NSFont systemFontOfSize:12 weight:NSFontWeightRegular],
+    NSTextField *l = MakeLabel(left, [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
                                [NSColor labelColor]);
     l.maximumNumberOfLines = 1;
     [l setContentHuggingPriority:NSLayoutPriorityDefaultLow
                   forOrientation:NSLayoutConstraintOrientationHorizontal];
-    NSTextField *r = MakeValueLabel(right, 12, YES);
+    NSTextField *r = MakeValueLabel(right, 13, YES);
     if (rightField) *rightField = r;
     [r setContentHuggingPriority:NSLayoutPriorityRequired
                   forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -185,7 +190,7 @@ static NSImage *SizeTemplateImage(NSString *symbol, CGFloat size) {
 - (void)drawRect:(NSRect)dirtyRect {
     [super drawRect:dirtyRect];
     if (self.trailingGlyph) {
-        NSRect bounds = self.bounds;
+        NSRect bounds = [self alignmentRectForFrame:self.bounds];
         CGFloat w = MIN(kGlyphSize, NSWidth(bounds));
         CGFloat h = MIN(kGlyphSize, NSHeight(bounds));
         NSRect r = NSMakeRect(NSMaxX(bounds) - w, NSMidY(bounds) - h / 2, w, h);
@@ -207,6 +212,18 @@ static NSBox *MakeDivider(void) {
     box.boxType = NSBoxSeparator;
     box.translatesAutoresizingMaskIntoConstraints = NO;
     return box;
+}
+
+// Inset the whole control, keeping native text drawing and hit testing intact.
+static void AddInsetRow(NSStackView *parent, NSView *view) {
+    NSStackView *row = [NSStackView stackViewWithViews:@[view]];
+    row.orientation = NSUserInterfaceLayoutOrientationVertical;
+    row.alignment = NSLayoutAttributeLeading;
+    row.edgeInsets = NSEdgeInsetsMake(0, kInnerX, 0, kInnerX);
+    row.detachesHiddenViews = YES;
+    [parent addArrangedSubview:row];
+    [row.widthAnchor constraintEqualToAnchor:parent.widthAnchor].active = YES;
+    [view.widthAnchor constraintEqualToAnchor:row.widthAnchor constant:-2 * kInnerX].active = YES;
 }
 
 // MARK: - Panel controller
@@ -276,7 +293,7 @@ static NSBox *MakeDivider(void) {
         [content.leadingAnchor constraintEqualToAnchor:guide.leadingAnchor],
         [content.trailingAnchor constraintEqualToAnchor:guide.trailingAnchor],
         [content.topAnchor constraintEqualToAnchor:guide.topAnchor],
-        [content.bottomAnchor constraintLessThanOrEqualToAnchor:guide.bottomAnchor],
+        [content.bottomAnchor constraintEqualToAnchor:guide.bottomAnchor],
         [guide.leadingAnchor constraintEqualToAnchor:root.leadingAnchor constant:kInsetX],
         [guide.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-kInsetX],
         [guide.topAnchor constraintEqualToAnchor:root.topAnchor constant:kInsetTop],
@@ -293,11 +310,15 @@ static NSBox *MakeDivider(void) {
     headerRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     headerRow.distribution = NSStackViewDistributionFill;
     headerRow.spacing = 8;
+    headerRow.edgeInsets = NSEdgeInsetsMake(8, kInnerX, 8, kInnerX);
     self.headerTitle = MakeStrong(@"Sparky", 13);
-    self.headerState = MakeLabel(@"Ready", [NSFont systemFontOfSize:12 weight:NSFontWeightRegular],
+    self.headerState = MakeLabel(@"Ready", [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
                                  [NSColor secondaryLabelColor]);
     self.headerState.alignment = NSTextAlignmentRight;
+    NSView *headerSpace = [[NSView alloc] initWithFrame:NSZeroRect];
+    headerSpace.translatesAutoresizingMaskIntoConstraints = NO;
     [headerRow addArrangedSubview:self.headerTitle];
+    [headerRow addArrangedSubview:headerSpace];
     [headerRow addArrangedSubview:self.headerState];
     [content addArrangedSubview:headerRow];
     span(headerRow);
@@ -312,7 +333,9 @@ static NSBox *MakeDivider(void) {
 
     // Language model section.
     self.modelCaption = MakeCaption(@"Language model");
-    self.modelName = MakeStrong(@"Unknown", 15);
+    self.modelName = MakeStrong(@"Unknown", 13);
+    self.modelName.lineBreakMode = NSLineBreakByWordWrapping;
+    self.modelName.maximumNumberOfLines = 0;
     self.modelLocation = MakeBody(@"Waiting for status");
     self.extraModelsStack = [NSStackView stackViewWithViews:@[]];
     self.extraModelsStack.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -328,6 +351,10 @@ static NSBox *MakeDivider(void) {
     modelSection.edgeInsets = NSEdgeInsetsMake(8, kInnerX, 8, kInnerX);
     [self.overviewGroup addArrangedSubview:modelSection];
     span(modelSection);
+    for (NSView *v in @[self.modelName, self.modelLocation, self.extraModelsStack]) {
+        [v.widthAnchor constraintEqualToAnchor:modelSection.widthAnchor
+                                      constant:-2 * kInnerX].active = YES;
+    }
 
     // Wrapping text is constrained to the section's inner width so long model
     // names and errors wrap inside the panel rather than widening it.
@@ -369,25 +396,23 @@ static NSBox *MakeDivider(void) {
     span(self.divider2);
 
     // Load result line: short, only visible when the last load needs attention.
-    self.loadResult = MakeLabel(@"", [NSFont systemFontOfSize:11 weight:NSFontWeightRegular],
+    self.loadResult = MakeLabel(@"", [NSFont systemFontOfSize:12 weight:NSFontWeightRegular],
                                 [NSColor secondaryLabelColor]);
+    self.loadResult.maximumNumberOfLines = 0;
+    self.loadResult.lineBreakMode = NSLineBreakByWordWrapping;
     self.loadResult.preferredMaxLayoutWidth = kPanelWidth - 2 * kInsetX - 2 * kInnerX;
-    [self.overviewGroup addArrangedSubview:self.loadResult];
-    [self.loadResult.widthAnchor constraintEqualToAnchor:self.overviewGroup.widthAnchor
-                                                constant:-2 * kInnerX].active = YES;
+    AddInsetRow(self.overviewGroup, self.loadResult);
 
     // Actions: Load row with trailing chevron, then Refresh with trailing icon.
     self.loadButton = MakeActionRow(@"Load model…", @"chevron.right", self,
-                                    @selector(toggleLoad:), YES);
-    [self.overviewGroup addArrangedSubview:self.loadButton];
-    span(self.loadButton);
+                                    @selector(toggleLoad:), NO);
+    AddInsetRow(self.overviewGroup, self.loadButton);
 
     // Refresh keeps its icon at the far right to match the approved reference,
     // like the Load row's trailing chevron.
     self.refreshButton = MakeActionRow(@"Refresh status", @"arrow.clockwise", self,
                                        @selector(refreshStatus:), NO);
-    [self.overviewGroup addArrangedSubview:self.refreshButton];
-    span(self.refreshButton);
+    AddInsetRow(self.overviewGroup, self.refreshButton);
 
     // Footer with settings gear so settings do not dominate the panel.
     NSStackView *footerRow = [NSStackView stackViewWithViews:@[]];
@@ -418,27 +443,25 @@ static NSBox *MakeDivider(void) {
     self.pickerGroup.orientation = NSUserInterfaceLayoutOrientationVertical;
     self.pickerGroup.alignment = NSLayoutAttributeLeading;
     self.pickerGroup.spacing = 4;
-    self.pickerGroup.edgeInsets = NSEdgeInsetsMake(4, kInnerX, 6, kInnerX);
+    self.pickerGroup.edgeInsets = NSEdgeInsetsMake(4, 0, 6, 0);
     [content addArrangedSubview:self.pickerGroup];
     span(self.pickerGroup);
 
-    SparkyActionRow *back = MakeActionRow(@"Back", @"chevron.left", self,
+    SparkyActionRow *back = MakeActionRow(@"Load model", @"chevron.left", self,
                                           @selector(backToOverview:), YES);
-    [self.pickerGroup addArrangedSubview:back];
-    span(back);
+    AddInsetRow(self.pickerGroup, back);
 
     self.pickerCaption = MakeCaption(@"Run through the Sparky CLI");
     self.pickerCaption.preferredMaxLayoutWidth = kPanelWidth - 2 * kInsetX - 2 * kInnerX;
-    [self.pickerGroup addArrangedSubview:self.pickerCaption];
-    span(self.pickerCaption);
+    AddInsetRow(self.pickerGroup, self.pickerCaption);
 
     self.choiceStack = [NSStackView stackViewWithViews:@[]];
     self.choiceStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     self.choiceStack.alignment = NSLayoutAttributeLeading;
     self.choiceStack.spacing = 2;
+    self.choiceStack.edgeInsets = NSEdgeInsetsMake(0, kInnerX, 0, kInnerX);
     [self.pickerGroup addArrangedSubview:self.choiceStack];
-    [self.choiceStack.widthAnchor constraintEqualToAnchor:self.pickerGroup.widthAnchor
-                                                 constant:-2 * kInnerX].active = YES;
+    [self.choiceStack.widthAnchor constraintEqualToAnchor:self.pickerGroup.widthAnchor].active = YES;
 
     [self applyPicking:NO];
 }
@@ -530,19 +553,16 @@ static SparkyPanelController *Controller(void) {
     return (SparkyPanelController *)gController;
 }
 
-// Resize the popover to the content fitting height at the fixed panel width.
-// Clamped to a compact minimum so a one-line panel is not squat.
+// AppKit owns the root origin inside the popover chrome. Resize only its size.
 static void SizePopover(void) {
-    NSViewController *vc = gController;
+    SparkyPanelController *vc = Controller();
     [vc.view layoutSubtreeIfNeeded];
-    NSSize fit = vc.view.fittingSize;
-    CGFloat h = fit.height;
-    if (h < 320) h = 320;
-    vc.view.frame = NSMakeRect(0, 0, kPanelWidth, h);
-    // A headless construction probe builds the controller without a popover.
+    CGFloat h = ceil(vc.contentView.fittingSize.height + kInsetTop + kInsetBottom);
+    [vc.view setFrameSize:NSMakeSize(kPanelWidth, MAX(1, h))];
     if (gPopover && (gPopover.contentSize.height != h || gPopover.contentSize.width != kPanelWidth)) {
         gPopover.contentSize = NSMakeSize(kPanelWidth, h);
     }
+    [vc.view layoutSubtreeIfNeeded];
 }
 
 // Synchronously initialize the shared NSApplication on the caller's thread,
@@ -716,9 +736,9 @@ void sparky_set_requests(const char *label, const char *value) {
     OnMain(^{
         SparkyPanelController *c = Controller();
         ClearStack(c.requestsRow);
-        NSTextField *left = MakeLabel(lab, [NSFont systemFontOfSize:12 weight:NSFontWeightRegular],
+        NSTextField *left = MakeLabel(lab, [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
                                       [NSColor labelColor]);
-        NSTextField *right = MakeValueLabel(val, 12, YES);
+        NSTextField *right = MakeValueLabel(val, 13, YES);
         [c.requestsRow addArrangedSubview:left];
         [c.requestsRow addArrangedSubview:right];
         SizePopover();
@@ -768,7 +788,8 @@ void sparky_set_picker(int picking, const char *pickerCaption,
                 // AppKit raises NSGenericException ("no common ancestor") and
                 // terminates the app during catalog delivery.
                 [c.choiceStack addArrangedSubview:b];
-                [b.widthAnchor constraintEqualToAnchor:c.choiceStack.widthAnchor].active = YES;
+                [b.widthAnchor constraintEqualToAnchor:c.choiceStack.widthAnchor
+                                               constant:-2 * kInnerX].active = YES;
             }
         }
         [c applyPicking:(picking != 0)];
@@ -837,5 +858,59 @@ char *sparky_probe_picker_caption(void) {
     } @catch (NSException *ex) {
         NSLog(@"sparky panel probe caption raised %@: %@", ex.name, ex.reason);
         return NULL;
+    }
+}
+
+static NSRect AlignedRect(NSView *view, NSView *root) {
+    return [view.superview convertRect:[view alignmentRectForFrame:view.frame] toView:root];
+}
+
+// Exercise actual layout without a window. The synthetic host models the
+// nonzero content origin assigned by NSPopover, which must survive refreshes.
+char *sparky_probe_layout(int picking) {
+    if (![NSThread isMainThread] || !gController) return strdup("layout probe requires main thread");
+    SparkyPanelController *c = Controller();
+    NSView *root = c.view;
+    NSView *previous = root.superview;
+    NSRect previousFrame = root.frame;
+    NSView *host = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 600, 800)];
+    @try {
+        [host addSubview:root];
+        [root setFrameOrigin:NSMakePoint(13, 17)];
+        SizePopover();
+        if (!NSEqualPoints(root.frame.origin, NSMakePoint(13, 17)))
+            return strdup("resize changed the popover content origin");
+        CGFloat left = kInsetX + kInnerX, right = kPanelWidth - left;
+        NSArray *labels = picking ? @[c.pickerCaption] : @[c.headerTitle, c.modelName, c.memoryCaption, c.footer];
+        for (NSView *view in labels) {
+            NSRect r = AlignedRect(view, root);
+            if (fabs(NSMinX(r) - left) > 0.5 || NSMaxX(r) > right + 0.5)
+                return strdup([[NSString stringWithFormat:@"text outside column: %@", NSStringFromRect(r)] UTF8String]);
+        }
+        if (picking) {
+            for (NSView *view in c.choiceStack.arrangedSubviews) {
+                NSRect r = AlignedRect(view, root);
+                if (fabs(NSMinX(r) - left) > 0.5 || fabs(NSMaxX(r) - right) > 0.5)
+                    return strdup("picker choice exceeds its inset column");
+            }
+        } else {
+            NSRect state = AlignedRect(c.headerState, root);
+            NSRect load = AlignedRect(c.loadButton, root);
+            if (fabs(NSMaxX(state) - right) > 0.5 || fabs(NSMinX(load) - left) > 0.5 ||
+                fabs(NSMaxX(load) - right) > 0.5)
+                return strdup("header state or action row is outside its column");
+            if (c.loadButton.leadingGlyph || !c.loadButton.trailingGlyph)
+                return strdup("Load must have a trailing chevron");
+        }
+        CGFloat expected = ceil(c.contentView.fittingSize.height + kInsetTop + kInsetBottom);
+        if (fabs(NSHeight(root.frame) - expected) > 0.5)
+            return strdup("panel has surplus height beyond its content");
+        return NULL;
+    } @catch (NSException *ex) {
+        return strdup(ex.reason.UTF8String);
+    } @finally {
+        [root removeFromSuperview];
+        if (previous) [previous addSubview:root];
+        root.frame = previousFrame;
     }
 }

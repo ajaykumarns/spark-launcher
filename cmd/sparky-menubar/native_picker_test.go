@@ -19,6 +19,7 @@ import (
 var (
 	nativeStartupErr error
 	nativeStartupRan bool
+	nativeLayoutErr  error
 )
 
 // nativePickerCase drives the real sparky_set_picker bridge headlessly: no
@@ -81,9 +82,35 @@ func TestMain(m *testing.M) {
 	// so the ordinary Go tests are free to schedule normally.
 	runtime.LockOSThread()
 	nativeStartupErr = nativePickerCase()
+	nativeLayoutErr = nativeLayoutCase()
 	nativeStartupRan = true
 	runtime.UnlockOSThread()
 	os.Exit(m.Run())
+}
+
+func nativeLayoutCase() error {
+	panelSetContent(panelStrings{
+		HeaderTitle: "Sparky", HeaderState: "Ready", ModelCaption: "Language model",
+		ModelName: "deepseek-v4.1-flash-1017", ModelLocation: "Ready on Spark 1 + Spark 2",
+		MemoryCaption: "Device memory · in use / total", LoadLabel: "Load model…",
+		RefreshLabel: "Refresh status", Footer: "Updated just now",
+	})
+	panelSetMemoryRows([]panelPair{{"Spark 1", "114.6 / 121.7 GiB"}, {"Spark 2", "115.4 / 121.7 GiB"}})
+	panelSetRequests("Active requests", "0")
+	if err := probeLayout(false); err != "" {
+		return fmt.Errorf("overview: %s", err)
+	}
+	panelSetPicker(true, "Run through the Sparky CLI", []string{"DeepSeek", strings.Repeat("Long model name ", 8)}, []string{"deepseek", "long"})
+	if err := probeLayout(true); err != "" {
+		return fmt.Errorf("picker: %s", err)
+	}
+	return nil
+}
+
+func TestNativeLayout(t *testing.T) {
+	if nativeLayoutErr != nil {
+		t.Fatal(nativeLayoutErr)
+	}
 }
 
 func TestNativePickerInsertionOrder(t *testing.T) {
