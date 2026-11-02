@@ -1,6 +1,6 @@
 # Sparky
 
-One Python command controls the two Sparks and launches Claude Code, Hermes, Codex, or OpenCode.
+One native Go command controls the two Sparks and launches Claude Code, Hermes, Codex, or OpenCode. It runs on the Mac and on both Sparks as a single standalone binary.
 
 ```sh
 sparky
@@ -83,7 +83,7 @@ A placement change applies on the next load. Use a plan first to see which idle 
 
 ## Resource control
 
-The controller runs as `sparky-controller.service` on Spark 1. The existing llama-swap manager handles explicit model loading and unloading. Inference cannot start a stopped model. Idle unloading is disabled. Sparky derives its compatibility matrix from the central model placements. Nemotron on Spark 1 and Qwen on Spark 2 can run together. The two-device models require both nodes.
+The controller runs as `sparky-controller.service` on Spark 1. In legacy mode, the existing llama-swap manager handles explicit model loading and unloading (the native lifecycle has its own supervisor). Inference cannot start a stopped model. Idle unloading is disabled. Sparky derives its compatibility matrix from the central model placements. Nemotron on Spark 1 and Qwen on Spark 2 can run together. The two-device models require both nodes.
 
 The controller tracks node reservations for LLM requests and ComfyUI jobs. Conflicting work waits. Active LLM requests and active image jobs finish before a conflicting model is unloaded. Unknown activity prevents unloading. Idle ComfyUI caches can be released. Protected Parakeet containers stay loaded. These are software admission checks. They do not create a hardware GPU memory cap.
 
@@ -106,8 +106,9 @@ load a stopped language model or replace a loaded one. If the selected model is
 not ready, the gateway returns an error that asks the agent to ask the human to
 switch the model. The error tells the agent not to load or unload models automatically.
 `spark-auto` selects a ready target. It returns an error if no target is ready.
-The controller sends admitted inference directly to the reserved model server.
-llama-swap still handles explicit model loading and unloading. The controller
+The controller sends admitted inference directly to the reserved model server
+in both lifecycles. In legacy mode, llama-swap still handles explicit model
+loading and unloading only. The controller
 keeps request limits, device reservations, streaming, and forced cancellation.
 Language model idle unloading is disabled. The legacy `idle_ttl_seconds` field
 does not enable it. Exclusive image jobs wait until you explicitly unload any
@@ -176,24 +177,58 @@ Claude Code's context environment applies at launch. Start a new process to sele
 
 ## Logs and access
 
-Bifrost keeps the existing SQLite LLM call logs. Sparky adds SQLite resource decision records on Spark 1 at `controller/events.sqlite3`. Local launch records contain model, context, project, timestamps, and exit status. They do not contain prompts, tokens, copied environments, or credentials. Private configuration backups stay outside the repository.
+Bifrost keeps the existing SQLite LLM call logs. Sparky records resource
+decisions as JSON Lines on Spark 1 at `controller/events.jsonl` (one JSON
+object per line, `0600`, appended under a file lock). Entries carry action,
+time, workload, node, prompt id, and timing — never prompts, tokens, copied
+environments, or credentials. Local launch records contain model, context,
+project, timestamps, and exit status. Private configuration backups stay
+outside the repository.
 
 The controller binds loopback for gateway and administrator operations. Its direct-link listener accepts only scoped ComfyUI job operations from the configured node. Public ingress adds only the read-only catalog route. Administrator endpoints and credentials remain separate.
 
 ## Install and verify
 
-Python 3.11 or later is required. The client uses Rich for terminal tables and colors. The node archive includes the terminal renderer, so it needs no new system packages. The client uses `ruamel.yaml` to preserve Hermes comments. The node archive includes a portable YAML parser to validate native manager configuration. It does not require host Python packages.
+The Go build is authoritative. It produces the `sparky` command and the
+standalone `sparky-install` helper with no system package dependencies.
 
 ```sh
-uv tool install .
+make build                # dist/sparky and dist/sparky-install (this machine)
+make crossbuild           # darwin/arm64 and linux/arm64 under dist/
+make test                 # Go test ./...
+make race                 # Go test -race
 sparky --help
-make test
-uv run --locked make node-helper
 ```
 
-Copy `dist/sparky.pyz` and `tools/install_node_helper.py` to each Spark. Run
-`python3 install_node_helper.py --archive sparky.pyz` on that Spark. The installer
-keeps a backup and preserves archive offsets used by a running controller. Stage the cluster configuration on Spark 1. The explicit node installer creates the controller service and ComfyUI guards. It waits for image queues to drain before it restarts each ComfyUI service. It preserves running LLM and Parakeet containers. It keeps private backups of changed server files.
+`dist/` is build output and never committed. Builds use reproducible flags
+(`-trimpath`, `-buildvcs=false`) and touch no network, services, or models.
+
+Install the compiled `sparky` binary with the standalone installer:
+
+```sh
+./dist/sparky-install --source ./dist/sparky
+```
+
+The default target is `~/.local/bin/sparky`; pass `--target` to choose another
+path. The installer validates that the source is a real binary for the current
+machine's architecture, keeps a private backup of the previous target (its
+bytes, or the original symlink name when the target is a `uv`-managed link),
+and replaces the target atomically. If another writer changes the target
+during the install, the install aborts and the target is left untouched. A
+running process keeps using its old binary file; the replacement takes effect
+on the next launch.
+
+Replacing an old **Python zipapp** helper while the legacy Python controller
+is still running would break its lazy imports. The installer refuses that
+replacement by default. Drain and stop the old Python controller first, then
+run again with `--legacy-processes-stopped`. The installer never kills
+processes or changes services; it only confirms that you stopped them. This
+explicit flag is for the one-time migration to the native binary.
+
+Stage the cluster configuration on Spark 1. The explicit node installer
+creates the controller service and ComfyUI guards. It waits for image queues
+to drain before it restarts each ComfyUI service. It preserves running LLM
+and Parakeet containers. It keeps private backups of changed server files.
 
 ```sh
 sparky node install --dir /path/to/staged-config
@@ -202,6 +237,69 @@ sparky node install --dir /path/to/staged-config
 The staged folder must contain `models.json`. The first install creates the central file. A later install preserves an existing central file. The `node` command is the private machine protocol. Normal users do not need it. Its output stays JSON for the manager and SSH transport.
 
 `sparky` is the sole command. Old `spark`, `spark-models`, and `opencode-spark` commands are removed. There are no compatibility wrappers.
+
+## Native lifecycle
+
+The central file's `lifecycle` field selects the model lifecycle. The default
+is **llama-swap**: with `lifecycle` unset or `"llama-swap"`, llama-swap keeps
+handling explicit load and unload exactly as today, while admitted inference
+is proxied by the Go controller straight to the model server (in both
+lifecycles), and the native records and supervisor stay dormant
+(`internal/sparky/runtime.go`, `internal/sparky/image.go`). Only `"native"` switches the native
+path; any other spelling is rejected, never silently mapped.
+
+With `lifecycle: "native"`:
+
+- **Durable supervisor.** Each model start writes a lifecycle record under
+  `controller/lifecycle/<name>.json` (single JSON file, `0600`, atomic) before
+  any unit is started. The record freezes the recipe snapshot, nodes, units,
+  placement, generation token, and recipe fingerprint. A systemd `ExecStop`/
+  `ExecStopPost` hook calls `sparky node lifecycle --action stop|cleanup`, so
+  a supervisor crash still drains the ranks it owns — ownership is read from
+  the durable record, never from a live flag (`internal/sparky/native_supervisor.go`, `native_state.go`).
+- **Exact-model readiness.** Readiness requires the backend's `/v1/models` id
+  to match the catalog name exactly (not an alias or prefix) and all recorded
+  ranks to stay in the exact systemd unit. A stale health endpoint on the
+  recipe port refuses the start.
+- **Stop and rollback.** Stop only touches the units this generation actually
+  attempted (durable attempt flags) or, once ready, all recorded units.
+  A failed startup rolls back the ranks it started and confirms them stopped
+  before the record goes to `failed`. A failed recipe render rolls the
+  original live file back from its captured mode and content.
+- **Same-model migration.** A re-run of the same model with the same recipe
+  fingerprint adopts the in-progress `queued`/`starting` record instead of
+  restarting; a different fingerprint on an in-flight model is refused. The
+  switch-over conditions remain the operator's: agent sessions drained and
+  idle, gateway auth active, zero queued requests, and the old Python
+  controller stopped — see the installer note below for the zipapp rule.
+- **Protected guards.** Protected audio (Parakeet) containers and active or
+  unknown image-engine work always block a start that needs their devices;
+  failures and unknowns are never read as idle. The ComfyUI guard remains the
+  engine-owned `internal/sparky/assets/comfy_guard.py`.
+
+The controller serves the compatibility surface Bifrost and clients use:
+`GET /v1/models` (exact ids plus aliases), loopback `POST /v1/chat/completions`
+and `/v1/completions`, `GET /sparky/catalog`, `GET /v1/image-models`,
+`POST /v1/images/generations`, `GET+POST /control/*`, and `POST /jobs/acquire|release|cancel`. The `/v1/responses`, `/v1/embeddings`, Anthropic, and audio routes stay with the nginx/Bifrost layer, and llama-swap's private UI endpoints are deliberately not exposed.
+
+## Legacy Python source
+
+The `src/` and `tests/` Python trees are reference and rollback only. They are
+not built or installed; run them only for comparison with
+`make test-python-reference`. The migration to the native Go binary drains
+and stops the old Python controller before the helper is replaced, keeps the
+same selected model placement, retains private backups for rollback, and
+brings manager parity up to date before the native path is switched on.
+Native deployment is verified and current (see [docs/VALIDATION.md](docs/VALIDATION.md)).
+The legacy default is retained for controlled migration and rollback: with
+`lifecycle` unset or `"llama-swap"`, llama-swap keeps handling explicit load
+and unload as before; admitted inference goes to the model server directly in
+both lifecycles. The native lifecycle is an explicit configuration choice
+(`"native"`) with its own durable record, supervisor, and rollback path. The
+Python-engine-owned ComfyUI guard and the OCR bootstrap are unchanged
+exceptions owned by the engines. The Python Sparky trees in `src/` and
+`tests/` are reference and rollback only; they are unused by the installed
+native binaries.
 
 The interface review is in [docs/usability-review.md](docs/usability-review.md). The full correctness review is in [docs/correctness-review.md](docs/correctness-review.md). Current checks are in [docs/VALIDATION.md](docs/VALIDATION.md).
 
