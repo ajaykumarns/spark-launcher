@@ -569,6 +569,18 @@ func servedModelID(key string, m Object) string {
 	return key
 }
 
+// backendForRecipe returns the backend URL a frozen recipe really binds: the
+// selected setting's backend_url first, then the backend_url recorded in the
+// same record's frozen setting (a recipe rewritten after the load must never
+// redirect readiness or inference to another endpoint). An empty result means
+// no trustworthy backend identity exists for this placement.
+func backendForRecipe(s Object, rec Object) string {
+	if b := strings.TrimRight(str(s["backend_url"]), "/"); b != "" {
+		return b
+	}
+	return strings.TrimRight(str(obj(rec["setting"])["backend_url"]), "/")
+}
+
 // nativeReady is the strong native readiness: a validated READY record with
 // the matching recipe fingerprint, placement, nodes and units, the current
 // generation, an exactly ACTIVE supervisor, all recorded rank units ACTIVE,
@@ -607,7 +619,13 @@ func (r *Runtime) nativeReady(ctx context.Context, name string, m, s Object, nod
 			return false
 		}
 	}
-	backend := strings.TrimRight(str(s["backend_url"]), "/")
+	// The backend identity comes from the selected recipe, then from the
+	// record's own frozen setting: an edited backend_url must never claim a
+	// ready record served by an unrelated endpoint.
+	backend := backendForRecipe(s, rec)
+	if backend == "" {
+		return false
+	}
 	if _, _, err := request(ctx, "GET", backend+"/health", nil, r.backendHeaders(), 3*time.Second); err != nil {
 		return false
 	}

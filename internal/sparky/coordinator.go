@@ -126,6 +126,103 @@ func (c *Coordinator) refresh() error {
 	c.runtime.configure(v)
 	return nil
 }
+
+// effectiveNodes returns the node set a request for name must use: the
+// ACTUAL frozen loaded placement when the model is loaded, otherwise the
+// desired placement of the current config. A transient one-shot load (or a
+// saved run_on change not yet applied) therefore keeps admission, readiness
+// and inference routing on the nodes the model really runs on. The record is
+// validated (enabled current model, llm kind, matching placement, units,
+// recipe fingerprint and topology) before its nodes are trusted.
+func (c *Coordinator) effectiveNodes(cfg Object, name string) ([]string, error) {
+	sel, err := c.loadedSelection(name)
+	if err != nil {
+		return nil, err
+	}
+	return sel.Nodes, nil
+}
+
+// checkPlacement validates an explicit one-shot placement for name against
+// the ACTUAL configured recipe (aliases resolve first). Only language
+// models accept the override: audio and image workloads keep their own
+// placement semantics and are refused BEFORE any side effect. Unit names are
+// per-node identities: a configured unit for each selected node is required,
+// and identical unit basenames on different nodes remain valid.
+func checkPlacement(cfg Object, name, on string) error {
+	if on == "" {
+		return nil
+	}
+	if placements[on] == nil {
+		return fail("--on must be spark01, spark02, or both.")
+	}
+	_, s, _, _, err := selectPlacement(cfg, name, on)
+	if err != nil {
+		return err
+	}
+	m := obj(obj(cfg["models"])[name])
+	if str(m["kind"]) != "llm" {
+		return fail("--on is supported only for language models; %s is %s.", name, orDefault(str(m["kind"]), "a service"))
+	}
+	for _, node := range placements[on] {
+		unit := str(obj(s["units"])[node])
+		if unit == "" || !serviceName.MatchString(unit) {
+			return fail("%s has no complete recipe for %s.", name, on)
+		}
+	}
+	return nil
+}
+
+// placementNodesFor reports the nodes of the placement a load will use.
+func placementNodesFor(cfg Object, name, on string) []string {
+	if on != "" {
+		if nodes := placements[on]; nodes != nil {
+			return append([]string{}, nodes...)
+		}
+	}
+	return placements[str(obj(obj(cfg["models"])[name])["run_on"])]
+}
+
+// selectionFor resolves what a load of name with one-shot placement on would
+// run at: the requested placement for an explicit override, the SAVED
+// default for a no-flag load. It is a pure config query (no record read) so
+// a load always targets the requested placement even while an old
+// generation is still loaded elsewhere.
+func selectionFor(cfg Object, name, on string) (*runtimeSelection, error) {
+	m, s, nodes, placement, err := selectPlacement(cfg, name, on)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimeSelection{Model: m, Setting: s, Nodes: nodes, Placement: placement}, nil
+}
+
+// targetSelection resolves the load plan: an explicit one-shot placement is
+// validated first, then the target selection is resolved. Reservation nodes
+// (the model's currently recorded nodes) are computed separately and are
+// never mixed into the target recipe nodes.
+func (c *Coordinator) targetSelection(cfg Object, name, on string) (*runtimeSelection, error) {
+	if err := checkPlacement(cfg, name, on); err != nil {
+		return nil, err
+	}
+	return selectionFor(cfg, name, on)
+}
+
+// loadedSelection resolves the ACTUAL loaded placement of name from its
+// validated durable record (see Runtime.loadedSelection).
+func (c *Coordinator) loadedSelection(name string) (*runtimeSelection, error) {
+	return c.runtime.loadedSelection(name)
+}
+
+// reservationNodes returns the nodes a model currently owns (its validated
+// loaded record), which a new load must additionally reserve/evict on. These
+// are distinct from the target recipe nodes and never feed readiness.
+func (c *Coordinator) reservationNodes(name string) []string {
+	sel, err := c.loadedSelection(name)
+	if err != nil || !sel.Actual {
+		return nil
+	}
+	return sel.Nodes
+}
+
 func sharedComfy(cfg Object) bool {
 	return !boolean(value(obj(cfg["policy"]), "comfyui_exclusive_with_llms", true))
 }
@@ -313,6 +410,24 @@ func (c *Coordinator) snapshot(ctx context.Context, fresh bool) (Object, error) 
 		obj(v)["active_requests"] = max(count, legacy[name])
 	}
 	c.mu.Unlock()
+	// Status reports the ACTUAL validated loaded placement of every native
+	// LLM, not just the nodes the physical probe saw: a one-shot load or a
+	// pending run_on change must show where the model really runs. A model
+	// with no valid loaded record keeps the probed row unchanged.
+	if c.runtime.native() {
+		for name, v := range obj(data["models"]) {
+			row := obj(v)
+			if str(row["kind"]) != "llm" {
+				continue
+			}
+			sel, err := c.loadedSelection(name)
+			if err != nil || !sel.Actual {
+				continue
+			}
+			row["nodes"] = append([]string{}, sel.Nodes...)
+			row["placement"] = sel.Placement
+		}
+	}
 	data["admission"] = c.admission()
 	data["config_path"] = c.path
 	return data, nil
@@ -326,11 +441,38 @@ func (c *Coordinator) plan(ctx context.Context, requested, action, on string) (O
 	if err != nil {
 		return nil, err
 	}
+	// An explicit load placement is refused in a legacy deployment BEFORE
+	// the snapshot is even taken, consistently with execution: the manager
+	// sync path cannot honour a transient placement, so the plan never
+	// previews one or advertises its capability.
+	if on != "" && action == "load" {
+		if err := checkPlacement(cfg, name, on); err != nil {
+			return nil, err
+		}
+		if str(cfg["lifecycle"]) != "native" {
+			return nil, fail("--on requires the native model lifecycle and cannot be used in legacy mode.")
+		}
+	}
 	snapshot, err := c.snapshot(ctx, true)
 	if err != nil {
 		return nil, err
 	}
-	return makePlan(cfg, name, snapshot, action, on)
+	// A one-shot load placement is previewed exactly as it will run: the
+	// actual recipe is validated and the conflict decisions use the actual
+	// loaded nodes, while the saved run_on stays untouched.
+	result, err := makePlan(cfg, name, snapshot, action, on)
+	if err != nil {
+		return nil, err
+	}
+	if on != "" && action == "load" {
+		// Capability marker for the private node: an explicit placement
+		// override is only sent to a controller that advertises it. An OLD
+		// controller may already preview the placement but silently ignores
+		// the "on" field on load, so the node refuses to proceed unless this
+		// exact marker is present in the READ-ONLY plan response.
+		result["placement_override_supported"] = true
+	}
+	return result, nil
 }
 
 // ReconcileJobs compares leases with the actual ComfyUI engine state. An
@@ -398,15 +540,18 @@ func (c *Coordinator) resolveAuto(ctx context.Context) (string, error) {
 		return "", fail("Automatic model routing is not configured.")
 	}
 	for _, name := range stringsOf(obj(cfg["auto"])["targets"]) {
-		_, s, nodes, _, err := selectPlacement(cfg, name, "")
-		if err == nil && c.runtime.ready(ctx, name, s, nodes) {
+		// Auto admission probes the ACTUAL loaded selection of each target:
+		// a one-shot placement or a pending run_on change must never be
+		// reported ready on the desired nodes it does not run on.
+		sel, err := c.loadedSelection(name)
+		if err == nil && backendForRecipe(sel.Setting, sel.Record) != "" && c.runtime.ready(ctx, name, sel.Setting, sel.Nodes) {
 			return name, nil
 		}
 	}
 	return "", fail("No automatic routing target is ready. Ask the human to switch the model. Do not load or unload models automatically.")
 }
-func (c *Coordinator) requireReady(ctx context.Context, name string, s Object, nodes []string) error {
-	if !c.runtime.ready(ctx, name, s, nodes) {
+func (c *Coordinator) requireReady(ctx context.Context, name string, sel *runtimeSelection) error {
+	if sel == nil || !c.runtime.ready(ctx, name, sel.Setting, sel.Nodes) {
 		return fail("%s is not ready at the selected placement. Ask the human to switch the model. Do not load or unload models automatically.", name)
 	}
 	return nil
@@ -450,25 +595,34 @@ func (c *Coordinator) llmRequest(ctx context.Context, requested string) (string,
 	if err != nil {
 		return "", "", err
 	}
-	m, s, nodes, _, err := selectPlacement(cfg, name, "")
+	// The ACTUAL loaded selection drives the whole request: nodes, frozen
+	// recipe, backend identity and the readiness proof. A model loaded
+	// through a one-shot placement (or a saved run_on change not yet
+	// applied) is admitted, probed and routed on what really runs — never
+	// the desired run_on that the backend no longer serves.
+	sel, err := c.loadedSelection(name)
 	if err != nil {
 		return "", "", err
 	}
-	if str(m["kind"]) != "llm" {
+	if str(sel.Model["kind"]) != "llm" {
 		return "", "", fail("Select a language model for this endpoint.")
 	}
-	if !c.unchanged(generation, nodes) {
+	backend := backendForRecipe(sel.Setting, sel.Record)
+	if backend == "" {
+		return "", "", fail("%s is not ready at the selected placement. Ask the human to switch the model. Do not load or unload models automatically.", name)
+	}
+	if !c.unchanged(generation, sel.Nodes) {
 		return "", "", fail("A forced model operation cancelled this waiting request.")
 	}
-	if err := c.requireReady(ctx, name, s, nodes); err != nil {
+	if err := c.requireReady(ctx, name, sel); err != nil {
 		return "", "", err
 	}
 	c.reconcileJobs(ctx)
-	id, err := c.acquire(ctx, name, nodes, false, int(num(s["concurrency"])), "", "", true)
+	id, err := c.acquire(ctx, name, sel.Nodes, false, int(num(sel.Setting["concurrency"])), "", "", true)
 	if err != nil {
 		return "", "", err
 	}
-	if err := c.requireReady(ctx, name, s, nodes); err != nil {
+	if err := c.requireReady(ctx, name, sel); err != nil {
 		c.release(id)
 		return "", "", err
 	}
@@ -480,7 +634,7 @@ func (c *Coordinator) llmRequest(ctx context.Context, requested string) (string,
 		return "", "", fail("The admission lease vanished before the backend was bound.")
 	}
 	cancelled := l.Cancelled
-	l.Backend = str(s["backend_url"])
+	l.Backend = backend
 	c.mu.Unlock()
 	if cancelled {
 		c.release(id)
@@ -488,13 +642,49 @@ func (c *Coordinator) llmRequest(ctx context.Context, requested string) (string,
 	}
 	return name, id, nil
 }
-func (c *Coordinator) load(ctx context.Context, requested string, force bool) (Object, error) {
-	if force {
-		return c.force(ctx, requested, "load")
+
+// confirmedSelection returns the ACTUAL validated loaded selection of name
+// as a result acknowledgment: the confirmed placement and nodes that the
+// durable record proves, plus the backend identity that recipe binds. A
+// successful operation must report only what really runs; there is no
+// fallback to the requested placement.
+func (c *Coordinator) confirmedSelection(name string) (Object, error) {
+	sel, err := c.loadedSelection(name)
+	if err != nil {
+		return nil, err
 	}
-	return c.loadInternal(ctx, requested, "")
+	if sel == nil || !sel.Actual {
+		return nil, fail("The actual placement of %s is not confirmed. The controller must be upgraded and restarted to support one-shot placement overrides.", name)
+	}
+	// A queued or starting generation is not a confirmed success: status
+	// ready may be acknowledged only from the validated READY record.
+	if str(sel.Record["state"]) != StateReady {
+		return nil, fail("%s is not ready at the selected placement. Ask the human to switch the model. Do not load or unload models automatically.", name)
+	}
+	backend := backendForRecipe(sel.Setting, sel.Record)
+	if backend == "" {
+		return nil, fail("%s is not ready at the selected placement. Ask the human to switch the model. Do not load or unload models automatically.", name)
+	}
+	result := Object{"status": "ready", "workload": name, "placement": sel.Placement,
+		"nodes": append([]any{}, anyStrings(sel.Nodes)...), "backend": backend}
+	return result, nil
 }
-func (c *Coordinator) loadInternal(ctx context.Context, requested, forceID string) (Object, error) {
+
+func (c *Coordinator) load(ctx context.Context, requested string, force bool, on ...string) (Object, error) {
+	override := ""
+	if len(on) > 0 {
+		override = on[0]
+	}
+	if force {
+		return c.force(ctx, requested, "load", override)
+	}
+	return c.loadInternal(ctx, requested, "", override)
+}
+func (c *Coordinator) loadInternal(ctx context.Context, requested, forceID string, on ...string) (Object, error) {
+	override := ""
+	if len(on) > 0 {
+		override = on[0]
+	}
 	generation := c.generationCopy()
 	if err := c.reconfigure.lock(ctx); err != nil {
 		return nil, err
@@ -508,21 +698,54 @@ func (c *Coordinator) loadInternal(ctx context.Context, requested, forceID strin
 	if err != nil {
 		return nil, err
 	}
-	_, s, nodes, placement, err := selectPlacement(cfg, name, "")
+	// An explicit one-shot placement is validated against the model's
+	// ACTUAL recipe before any stop, eviction or reservation.
+	sel, err := c.targetSelection(cfg, name, override)
 	if err != nil {
 		return nil, err
 	}
-	if !c.unchanged(generation, nodes) {
+	if override != "" && str(cfg["lifecycle"]) != "native" {
+		// Legacy deployments have no native lifecycle: the manager sync/HUP
+		// path cannot honour a transient placement. Refuse BEFORE any sync,
+		// lease cancellation or unit change, for normal, force and JSON.
+		return nil, fail("--on requires the native model lifecycle and cannot be used in legacy mode.")
+	}
+	s, nodes, placement := sel.Setting, append([]string{}, sel.Nodes...), sel.Placement
+	// The transient selection must be reflected in the operation's own
+	// config snapshot so readiness, probes and the durable record all see
+	// the frozen recipe (the saved run_on is never rewritten).
+	if override != "" {
+		cfg = copyObject(cfg)
+		obj(obj(cfg["models"])[name])["run_on"] = override
+	}
+	// Reservation nodes are computed SEPARATELY from the target recipe
+	// nodes: the model's current validated loaded placement must be freed
+	// and reserved, but it is never fed into readiness, start or the
+	// durable record as if it were part of the new recipe. A model moving
+	// between placements therefore targets exactly the requested nodes.
+	reserved := unionNodes(nodes, c.reservationNodes(name))
+	if !c.unchanged(generation, reserved) {
 		return nil, fail("A forced model operation cancelled this waiting request.")
 	}
 	kind := str(m["kind"])
+	var id string
 	if kind == "audio" {
+		// An audio service's containers live on its saved node; a one-shot
+		// placement override can never move it safely.
+		if override != "" {
+			return nil, fail("--on is supported only for language models; %s is %s.", name, kind)
+		}
 		if err := c.runtime.ensureAudio(ctx, name); err != nil {
 			return nil, err
 		}
 		return Object{"status": "ready", "workload": name}, nil
 	}
 	if kind != "llm" {
+		// ComfyUI weights are placed by the workflow request, not by a model
+		// load; refuse the override before starting any unit.
+		if override != "" {
+			return nil, fail("--on is supported only for language models; %s is %s.", name, kind)
+		}
 		for _, n := range nodes {
 			state, e := c.runtime.inspectNode(ctx, n)
 			if e != nil {
@@ -541,27 +764,42 @@ func (c *Coordinator) loadInternal(ctx context.Context, requested, forceID strin
 	// the normal rules) and readiness is rechecked on the frozen recipe
 	// before returning; a lost race falls through to the full path below.
 	if kind == "llm" && c.runtime.native() && c.runtime.nativeReady(ctx, name, m, s, nodes, placement) {
-		id, err := c.acquire(ctx, name, nodes, false, int(num(s["concurrency"])), "", forceID, true)
+		fastID, err := c.acquire(ctx, name, nodes, false, int(num(s["concurrency"])), "", forceID, true)
 		if err != nil {
 			return nil, err
 		}
-		defer c.release(id)
+		defer c.release(fastID)
 		if c.runtime.nativeReady(ctx, name, m, s, nodes, placement) {
+			if override != "" {
+				// An explicit override acknowledges only the ACTUAL
+				// validated record of the frozen transie selection.
+				return c.confirmedSelection(name)
+			}
 			return Object{"status": "ready", "workload": name}, nil
 		}
 	}
-	if err := c.runtime.syncLegacy(ctx); err != nil {
+	// A transient placement selection runs against its own frozen config
+	// snapshot: the shared runtime config is never mutated for the whole
+	// operation, so concurrent requests can never observe the override.
+	rt := c.runtime
+	if override != "" {
+		rt = c.runtime.frozenClone(cfg)
+		rt.owner = nil
+	}
+	if err := rt.syncLegacy(ctx); err != nil {
 		return nil, err
 	}
 	c.reconcileJobs(ctx)
-	ready := c.runtime.ready(ctx, name, s, nodes)
-	snapshot, err := c.runtime.snapshot(ctx, true)
+	ready := rt.ready(ctx, name, s, nodes)
+	snapshot, err := rt.snapshot(ctx, true)
 	if err != nil {
 		return nil, err
 	}
-	actual := stringsOf(obj(obj(snapshot["models"])[name])["nodes"])
-	reserved := unionNodes(nodes, actual)
-	id, err := c.acquire(ctx, name, reserved, !ready, 0, "", forceID, true)
+	// The admission lease covers BOTH the target recipe nodes and the nodes
+	// the model actually occupies now, so nothing is double-booked while the
+	// old placement drains; readiness below still only proves the target.
+	reserved = unionNodes(nodes, c.reservationNodes(name))
+	id, err = c.acquire(ctx, name, reserved, !ready, 0, "", forceID, true)
 	if err != nil {
 		return nil, err
 	}
@@ -569,23 +807,29 @@ func (c *Coordinator) loadInternal(ctx context.Context, requested, forceID strin
 	operationCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	c.registerCancel(id, cancel)
-	if err := c.transition.lock(operationCtx); err != nil {
-		return nil, err
+	operationLockErr := c.transition.lock(operationCtx)
+	if operationLockErr != nil {
+		return nil, operationLockErr
 	}
 	defer c.transition.unlock()
-	if c.runtime.ready(operationCtx, name, s, nodes) {
+	if rt.ready(operationCtx, name, s, nodes) {
+		if override != "" {
+			return c.confirmedSelection(name)
+		}
 		return Object{"status": "ready", "workload": name}, nil
 	}
-	snapshot, err = c.runtime.snapshot(operationCtx, true)
+	snapshot, err = rt.snapshot(operationCtx, true)
 	if err != nil {
 		return nil, err
 	}
 	for _, other := range keys(obj(snapshot["models"])) {
 		row := obj(obj(snapshot["models"])[other])
+		// Only the TARGET nodes drive which other models conflict. This
+		// model's own old placement is released explicitly below.
 		if str(row["kind"]) != "llm" || !boolean(row["loaded"]) || (!overlapNodes(nodes, stringsOf(row["nodes"])) && other != name) {
 			continue
 		}
-		if other == name && c.runtime.native() && c.runtime.adoptSelf(operationCtx, name, m, s, nodes, placement) {
+		if other == name && rt.native() && rt.adoptSelf(operationCtx, name, m, s, nodes, placement) {
 			// The model's own durable record already matches the selected
 			// recipe, placement, nodes and topology: adopt the SAME
 			// generation and wait instead of evicting itself. A changed
@@ -596,26 +840,51 @@ func (c *Coordinator) loadInternal(ctx context.Context, requested, forceID strin
 		if effectiveProtected(row, obj(cfg["policy"]), other) {
 			return nil, fail("%s must stay loaded on the requested device.", other)
 		}
-		if c.runtime.native() {
-			if err := c.runtime.stopModel(operationCtx, other); err != nil {
+		if rt.native() {
+			if other == name {
+				// Re-placements must clean this model's OWN previous
+				// generation first, even when the new placement is disjoint:
+				// a stopped record never blocks the later adoption.
+				samePlacement := sameStrings(stringsOf(row["nodes"]), nodes) && str(row["placement"]) == placement
+				if !samePlacement || !rt.adoptSelf(operationCtx, name, m, s, nodes, placement) {
+					if err := rt.stopModel(operationCtx, other); err != nil {
+						return nil, err
+					}
+				}
+				continue
+			}
+			if err := rt.stopModel(operationCtx, other); err != nil {
 				return nil, err
 			}
 		}
 	}
-	_ = c.runtime.event("load_requested", Object{"workload": name, "placement": placement})
-	if !c.runtime.native() {
+	_ = rt.event("load_requested", Object{"workload": name, "placement": placement})
+	if !rt.native() {
 		// Legacy deployments have no native lifecycle: the load goes
 		// through the manager health path exactly like a direct start.
-		if err := c.runtime.startModel(operationCtx, name); err != nil {
+		if err := rt.startModel(operationCtx, name); err != nil {
 			return nil, err
 		}
-	} else if err := c.runtime.startModelSelected(operationCtx, name, cfg); err != nil {
+	} else if err := rt.startModelSelected(operationCtx, name, cfg); err != nil {
 		return nil, err
 	}
-	if err := c.requireReady(operationCtx, name, s, nodes); err != nil {
-		return nil, err
+	// Readiness proof reads the ACTUAL frozen record of a transient load,
+	// never the shared runtime's saved placement.
+	if !rt.ready(operationCtx, name, s, nodes) {
+		return nil, fail("%s is not ready at the selected placement. Ask the human to switch the model. Do not load or unload models automatically.", name)
 	}
-	return Object{"status": "ready", "workload": name}, nil
+	result := Object{"status": "ready", "workload": name}
+	if override != "" {
+		// A transient selection is acknowledged ONLY with the ACTUAL
+		// confirmed placement and nodes; never the requested placement.
+		result, err = c.confirmedSelection(name)
+		if err != nil {
+			return nil, err
+		} else if result == nil {
+			return nil, fail("%s placement was not confirmed by the controller.", name)
+		}
+	}
+	return result, nil
 }
 
 // effectiveProtected reports whether a model must stay loaded under the
@@ -750,7 +1019,11 @@ func (c *Coordinator) unload(ctx context.Context, requested string, force bool) 
 	_ = c.runtime.event("unloaded", Object{"workload": name})
 	return Object{"status": "unloaded", "workload": name}, nil
 }
-func (c *Coordinator) force(ctx context.Context, requested, action string) (Object, error) {
+func (c *Coordinator) force(ctx context.Context, requested, action string, on ...string) (Object, error) {
+	override := ""
+	if len(on) > 0 {
+		override = on[0]
+	}
 	if !c.forceMu.TryLock() {
 		return nil, fail("Another forced model operation is running.")
 	}
@@ -778,9 +1051,21 @@ func (c *Coordinator) force(ctx context.Context, requested, action string) (Obje
 	if boolean(m["keep_loaded"]) {
 		return nil, fail("%s must stay loaded.", name)
 	}
+	if override != "" && str(cfg["lifecycle"]) != "native" {
+		// An explicit --on is refused BEFORE the forced generation bump,
+		// lease cancellation, drain, stop or reload (JSON and force too).
+		return nil, fail("--on requires the native model lifecycle and cannot be used in legacy mode.")
+	}
 	nodes := recordNodes
 	if recordNodes == nil {
-		_, _, nodes, _, err = selectPlacement(cfg, name, "")
+		// A forced one-shot load is validated against the model's actual
+		// recipe before any cancel, drain or stop.
+		if action == "load" {
+			if err := checkPlacement(cfg, name, override); err != nil {
+				return nil, err
+			}
+		}
+		_, _, nodes, _, err = selectPlacement(cfg, name, override)
 		if err != nil {
 			return nil, err
 		}
@@ -790,6 +1075,13 @@ func (c *Coordinator) force(ctx context.Context, requested, action string) (Obje
 		return nil, err
 	}
 	nodes = unionNodes(nodes, stringsOf(obj(obj(snapshot["models"])[name])["nodes"]))
+	// A forced load must also cancel and drain work on the model's ACTUAL
+	// nodes: the old placement holds the model and its requests.
+	if action == "load" {
+		if actual, e := c.effectiveNodes(cfg, name); e == nil {
+			nodes = unionNodes(nodes, actual)
+		}
+	}
 	affected := Object{name: true}
 	for n, v := range obj(snapshot["models"]) {
 		row := obj(v)
@@ -908,7 +1200,7 @@ func (c *Coordinator) force(ctx context.Context, requested, action string) (Obje
 		return nil, err
 	}
 	if action == "load" {
-		result, err := c.loadInternal(ctx, name, forceID)
+		result, err := c.loadInternal(ctx, name, forceID, override)
 		if err != nil {
 			return nil, err
 		}
@@ -1306,10 +1598,10 @@ func (c *Coordinator) Plan(model, action, on string) (Object, error) {
 	defer cancel()
 	return c.plan(ctx, model, action, on)
 }
-func (c *Coordinator) Load(model string, force bool) (Object, error) {
+func (c *Coordinator) Load(model string, force bool, on string) (Object, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
-	return c.load(ctx, model, force)
+	return c.load(ctx, model, force, on)
 }
 func (c *Coordinator) Unload(model string, force bool) (Object, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)

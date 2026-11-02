@@ -1147,7 +1147,7 @@ func TestLoadRefusesDeletedProtectedLoadedModel(t *testing.T) {
 	if err := env.coord.refresh(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := env.coord.Load("nemotron", false); err == nil || !strings.Contains(err.Error(), "must stay loaded") {
+	if _, err := env.coord.Load("nemotron", false, ""); err == nil || !strings.Contains(err.Error(), "must stay loaded") {
 		t.Fatalf("a deleted protected loaded model must refuse the conflicting load, got %v", err)
 	}
 	// Nothing was evicted or started: the protected record is still ready
@@ -1232,7 +1232,7 @@ func TestLegacyCoordinatorLoadUsesManagerHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := coord.Load("qwen", false)
+	out, err := coord.Load("qwen", false, "")
 	if err != nil {
 		t.Fatalf("a legacy load must succeed through the manager path: %v", err)
 	}

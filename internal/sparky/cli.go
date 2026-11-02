@@ -134,7 +134,10 @@ var cliSpecs = map[string]*cliSpec{
 		posChoices:  map[int][]string{0: cliPlanActions},
 		strFlags:    []string{"--on"},
 		flagChoices: map[string][]string{"--on": cliPlacements}},
-	"load":   {posMin: 1, posMax: 1, posNames: []string{"model"}, boolFlags: []string{"--force"}},
+	"load": {posMin: 1, posMax: 1, posNames: []string{"model"},
+		strFlags:    []string{"--on"},
+		flagChoices: map[string][]string{"--on": cliPlacements},
+		boolFlags:   []string{"--force"}},
 	"unload": {posMin: 1, posMax: 1, posNames: []string{"model"}, boolFlags: []string{"--force"}},
 	"image-profile": {posMax: 1, posNames: []string{"mode"},
 		posChoices: map[int][]string{0: cliProfileModes},
@@ -180,7 +183,7 @@ Commands:
   devices          Memory, disk, GPU, and containers on each Spark
   ocr ACTION       OCR service: install|status|start|stop
   plan ACTION NAME Preview load/unload steps without changing services
-  load NAME        Load a model after active work finishes (--force cancels conflicts)
+  load NAME        Load a model after active work finishes (--on NODE for one load, --force cancels conflicts)
   unload NAME      Unload a model after its active work finishes
   image-profile    Shared or dedicated image memory limits
   config ACTION    show [MODEL] | validate | placement MODEL ON
@@ -197,6 +200,7 @@ Examples:
   sparky status
   sparky models
   sparky plan load glm
+  sparky load glm --on spark01
   sparky claude --model qwen -- --continue
   sparky status --json
 

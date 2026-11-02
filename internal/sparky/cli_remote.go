@@ -97,9 +97,12 @@ var cliRemoteActions = []string{"status", "load", "unload", "gateway"}
 // cliRemoteCommand builds the ssh argv for one remote action word.
 // Validation (host alias, absolute root, action word, force rules) happens
 // before any process is spawned.
-func cliRemoteCommand(cfg clientConfig, action string, model string, force bool) ([]string, error) {
+func cliRemoteCommand(cfg clientConfig, action string, model string, force bool, on string) ([]string, error) {
 	if !contains(cliRemoteActions, action) {
 		return nil, fail("Unsupported remote action.")
+	}
+	if on != "" && (action != "load" || !contains(cliPlacements, on)) {
+		return nil, fail("--on is available only for load and must be spark01, spark02, or both.")
 	}
 	host, err := remoteSafeHost(remoteConfigString(cfg, "admin_ssh_host"))
 	if err != nil {
@@ -118,6 +121,9 @@ func cliRemoteCommand(cfg clientConfig, action string, model string, force bool)
 	}
 	if model != "" {
 		args = append(args, "--model", model)
+	}
+	if on != "" {
+		args = append(args, "--on", on)
 	}
 	return []string{"ssh", "-o", remoteConnectTimeoutArg, host, remoteSparkyPrefix + shellJoin(args)}, nil
 }
@@ -397,7 +403,7 @@ func remoteFailureMessage(code int, stderr string) string {
 
 // cliRemoteStatus asks the head device for its status (90s).
 func cliRemoteStatus(ctx context.Context, cfg clientConfig) (Object, error) {
-	argv, err := cliRemoteCommand(cfg, "status", "", false)
+	argv, err := cliRemoteCommand(cfg, "status", "", false, "")
 	if err != nil {
 		return nil, err
 	}
@@ -406,8 +412,8 @@ func cliRemoteStatus(ctx context.Context, cfg clientConfig) (Object, error) {
 
 // cliRemoteResult runs a remote load/unload (7230s) or other result action
 // (120s).
-func cliRemoteResult(ctx context.Context, cfg clientConfig, action string, model string, force bool) (Object, error) {
-	argv, err := cliRemoteCommand(cfg, action, model, force)
+func cliRemoteResult(ctx context.Context, cfg clientConfig, action string, model string, force bool, on string) (Object, error) {
+	argv, err := cliRemoteCommand(cfg, action, model, force, on)
 	if err != nil {
 		return nil, err
 	}

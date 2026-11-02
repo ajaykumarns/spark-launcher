@@ -37,6 +37,9 @@ const (
 	integrationHead     = "glm-head.service"
 	integrationWorker   = "glm-worker.service"
 	integrationParakeet = "parakeet"
+	integrationBothOnly = "bothonly"
+	integrationBothHead = "bothonly@both.service"
+	integrationBothWork = "bothonly@both.service"
 )
 
 // integrationEnv is the whole fake world: central file under a temp
@@ -56,9 +59,17 @@ type integrationEnv struct {
 	commands    [][]string
 	supLaunches int
 	chatHits    int
+	// singlePort is the DISTINCT backend the one-shot spark01 recipe binds
+	// (0 until writeCentralPlacements reserves it).
+	singlePort int
+	// singleHits counts requests served by the one-shot backend.
+	singleHits int
 
-	ln        net.Listener
-	srv       *http.Server
+	ln  net.Listener
+	srv *http.Server
+	// singleLn/singleSrv are the one-shot backend's own listener/server.
+	singleLn  net.Listener
+	singleSrv *http.Server
 	supCancel context.CancelFunc
 	supDone   chan struct{}
 	supErr    error
@@ -166,6 +177,92 @@ func (e *integrationEnv) writeCentral() {
 	}
 }
 
+// writeCentralPlacements rewrites the canonical glm fixture with BOTH a
+// single-node spark01 recipe and a two-rank "both" recipe while the SAVED
+// run_on stays "both". It is the fixture for the one-shot `--on spark01`
+// integration proof: the single-node recipe runs one rank and serves the
+// same shared backend identity.
+func (e *integrationEnv) writeCentralPlacements() {
+	cfg, err := readCluster(e.path)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	m := obj(obj(cfg["models"])[integrationModel])
+	both := obj(obj(m["settings"])["both"])
+	// DIFFERENT backend identities per placement: the frozen one-shot
+	// spark01 recipe binds its own port, so admission/readiness must use
+	// the ACTUAL record's backend, never the saved both recipe's.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	e.mu.Lock()
+	e.singlePort = probe.Addr().(*net.TCPAddr).Port
+	e.mu.Unlock()
+	_ = probe.Close()
+	single := Object{
+		"enabled": true, "backend_url": fmt.Sprintf("http://127.0.0.1:%d", e.singlePort),
+		"units": Object{"spark01": integrationHead},
+		// The one-shot recipe reuses the frozen spark01 parameter binding:
+		// the supervisor's render check must match on spark01.
+		"parameter_bindings": Object{"spark01": obj(both["parameter_bindings"])["spark01"]},
+		"context_tokens":     8192, "concurrency": 2, "parameters": Object{},
+		"startup_order": []any{"spark01"},
+	}
+	m["settings"] = Object{"both": both, "spark01": single}
+	if err := writeCluster(e.path, cfg); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// writeCentralBothOnly adds a BOTH-ONLY language model (a two-rank recipe
+// with a head unit on spark01 and a worker unit on spark02, the same unit
+// basename on both nodes) to the canonical fixture. It has no single-node
+// recipe, so a one-shot --on spark01/spark02 must be refused before any
+// cancel, stop or start.
+func (e *integrationEnv) writeCentralBothOnly() {
+	cfg, err := readCluster(e.path)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	// The canonical glm fixture becomes both-only (the one-shot move tests
+	// rewrite it themselves). Its saved run_on stays both.
+	obj(obj(cfg["models"])[integrationModel])["settings"] = Object{"both": func() Object {
+		m := obj(obj(cfg["models"])[integrationModel])
+		return copyObject(obj(obj(m["settings"])["both"]))
+	}()}
+	envPath := filepath.Join(e.root, "config", "recipe.env")
+	binding := func() []any {
+		return []any{Object{"path": envPath, "format": "env",
+			"fields": Object{"context_tokens": "CONTEXT_TOKENS"}}}
+	}
+	obj(cfg["models"])[integrationBothOnly] = Object{
+		"kind": "llm", "name": "Both Only", "run_on": "both",
+		"keep_loaded": false, "reasoning": true, "aliases": []any{},
+		"settings": Object{"both": Object{
+			"enabled": true, "backend_url": e.backend(),
+			"units":              Object{"spark01": integrationBothHead, "spark02": integrationBothWork},
+			"parameter_bindings": Object{"spark01": binding(), "spark02": binding()},
+			"context_tokens":     8192, "concurrency": 2, "parameters": Object{},
+			"startup_order": []any{"spark01", "spark02"},
+		}},
+	}
+	if err := writeCluster(e.path, cfg); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// commandsSnapshot copies the fake transport's command log.
+func (e *integrationEnv) commandsSnapshot() [][]string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([][]string, len(e.commands))
+	for i, args := range e.commands {
+		out[i] = append([]string{}, args...)
+	}
+	return out
+}
+
 // parakeetMeta returns the frozen protected Parakeet fake metadata.
 func (e *integrationEnv) parakeetMeta(t *testing.T) string {
 	t.Helper()
@@ -241,6 +338,7 @@ func (e *integrationEnv) startRank(unit string) error {
 	e.mu.Unlock()
 	if unit == integrationHead && ln == nil {
 		e.startBackend()
+		e.startSingleBackend()
 	}
 	return nil
 }
@@ -272,6 +370,45 @@ func (e *integrationEnv) stopRank(unit string) {
 	} else if idle && ln != nil {
 		_ = ln.Close()
 	}
+	if idle {
+		e.mu.Lock()
+		singleLn, singleSrv := e.singleLn, e.singleSrv
+		e.singleLn, e.singleSrv = nil, nil
+		e.mu.Unlock()
+		if singleSrv != nil {
+			_ = singleSrv.Close()
+		} else if singleLn != nil {
+			_ = singleLn.Close()
+		}
+	}
+}
+
+// startSingleBackend binds the DISTINCT one-shot backend port and serves the
+// same canonical model id. It is opened by the head rank start and closed
+// when the last rank stops, exactly like the shared backend.
+func (e *integrationEnv) startSingleBackend() {
+	port := e.singlePort
+	if port == 0 {
+		return
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+	if err != nil {
+		return
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		e.mu.Lock()
+		e.singleHits++
+		e.mu.Unlock()
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"` + integrationModel + `","object":"model"}]}`))
+	})
+	srv := &http.Server{Handler: mux}
+	e.mu.Lock()
+	e.singleLn = ln
+	e.singleSrv = srv
+	e.mu.Unlock()
+	go func() { _ = srv.Serve(ln) }()
 }
 
 // startBackend binds the recipe port and serves /health, the canonical
@@ -415,13 +552,18 @@ func (e *integrationEnv) joinSupervisor() {
 	e.mu.Lock()
 	srv := e.srv
 	ln := e.ln
-	e.srv = nil
-	e.ln = nil
+	singleSrv, singleLn := e.singleSrv, e.singleLn
+	e.srv, e.ln, e.singleSrv, e.singleLn = nil, nil, nil, nil
 	e.mu.Unlock()
 	if srv != nil {
 		_ = srv.Close()
 	} else if ln != nil {
 		_ = ln.Close()
+	}
+	if singleSrv != nil {
+		_ = singleSrv.Close()
+	} else if singleLn != nil {
+		_ = singleLn.Close()
 	}
 }
 
@@ -808,6 +950,364 @@ func TestNativeLifecycleIntegrationRoundTrip(t *testing.T) {
 	}
 	if e.isRunning(integrationHead) || e.isRunning(integrationWorker) {
 		t.Fatal("no rank may run after the final cleanup")
+	}
+	backendClosed(t, e.port)
+}
+
+// TestNativeLoadOnIntegrationOneShotPlacement is the real round trip for
+// the one-shot `--on spark01` override: the coordinator freezes a spark01
+// recipe, the REAL supervisor starts exactly the spark01 rank and writes
+// READY under the spark01 placement; the saved run_on stays "both" and a
+// later plain load applies the saved default (both). Admission and the
+// plan preview follow the ACTUAL loaded nodes, and a plain load while the
+// one-shot placement is ready reports keep_running rather than a restart.
+func TestNativeLoadOnIntegrationOneShotPlacement(t *testing.T) {
+	e := newIntegrationEnv(t)
+	e.writeCentralPlacements()
+	e.installFactory()
+	savedInterval := nativeMonitorInterval
+	nativeMonitorInterval = 5 * time.Millisecond
+	t.Cleanup(func() { nativeMonitorInterval = savedInterval })
+	t.Cleanup(func() { e.joinSupervisor() })
+
+	savedRunOn := func() string {
+		cfg, err := readCluster(e.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return str(obj(obj(cfg["models"])[integrationModel])["run_on"])
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	c, err := newCoordinator(e.path, e.runtime())
+	if err != nil {
+		t.Fatalf("coordinator: %v", err)
+	}
+
+	// The plan preview validates the actual recipe and previews spark01
+	// before anything changes.
+	plan, err := c.plan(ctx, integrationModel, "load", "spark01")
+	if err != nil {
+		t.Fatalf("plan --on spark01: %v", err)
+	}
+	if str(plan["placement"]) != "spark01" || !sameStrings(stringsOf(plan["nodes"]), []string{"spark01"}) {
+		t.Fatalf("plan must preview the one-shot placement: %v", plan)
+	}
+	// The READ-ONLY plan advertises the override capability the node
+	// preflight requires before sending an explicit load.
+	if raw, has := plan["placement_override_supported"]; !has || raw != true {
+		t.Fatalf("plan must advertise placement_override_supported: %v", plan)
+	}
+	if got := savedRunOn(); got != "both" {
+		t.Fatalf("the plan must never rewrite run_on: %q", got)
+	}
+
+	res, err := c.Load(integrationModel, false, "spark01")
+	if err != nil {
+		if s := e.supervisorFailure(); s != "" {
+			t.Fatalf("the one-shot load must succeed: %v (%s)", err, s)
+		}
+		t.Fatalf("the one-shot load must succeed: %v", err)
+	}
+	if str(res["status"]) != "ready" || str(res["placement"]) != "spark01" {
+		t.Fatalf("unexpected one-shot load result: %v", res)
+	}
+	// The acknowledgment must be the ACTUAL confirmed selection, including
+	// the distinct backend the frozen spark01 recipe binds.
+	if !sameStrings(stringsOf(res["nodes"]), []string{"spark01"}) ||
+		str(res["backend"]) != fmt.Sprintf("http://127.0.0.1:%d", e.singlePort) {
+		t.Fatalf("the one-shot load must acknowledge the confirmed selection: %v", res)
+	}
+	rec := integrationRecord(t, e)
+	if str(rec["state"]) != StateReady || str(rec["placement"]) != "spark01" {
+		t.Fatalf("the REAL supervisor must write a READY spark01 record, got %v", rec)
+	}
+	if !sameStrings(stringsOf(rec["nodes"]), []string{"spark01"}) {
+		t.Fatalf("the record must freeze only the spark01 node: %v", rec["nodes"])
+	}
+	if e.startCount(integrationHead) != 1 || e.startCount(integrationWorker) != 0 {
+		t.Fatalf("exactly the head rank may start, got %+v", e.startCounts)
+	}
+	if got := savedRunOn(); got != "both" {
+		t.Fatalf("the saved run_on must stay both after a one-shot load: %q", got)
+	}
+
+	// Admission follows the ACTUAL frozen nodes.
+	nodes, err := c.effectiveNodes(c.cfg(), integrationModel)
+	if err != nil || !sameStrings(nodes, []string{"spark01"}) {
+		t.Fatalf("admission nodes must follow the frozen record: %v %v", nodes, err)
+	}
+
+	// A fresh coordinator (same durable record, new in-memory state) must
+	// resolve the ACTUAL spark01 selection and bind the spark01 recipe's
+	// OWN backend on inference — never the saved both backend.
+	singleHits := func() int { e.mu.Lock(); defer e.mu.Unlock(); return e.singleHits }
+	before := singleHits()
+	fresh, err := newCoordinator(e.path, e.runtime())
+	if err != nil {
+		t.Fatalf("fresh coordinator: %v", err)
+	}
+	name, lease, err := fresh.LLMRequest(ctx, integrationModel)
+	if err != nil {
+		t.Fatalf("inference after a one-shot load must be admitted: %v", err)
+	}
+	defer fresh.Release(lease)
+	if name != integrationModel {
+		t.Fatalf("inferred model: %q", name)
+	}
+	if got := fresh.leaseBackend(lease); got != fmt.Sprintf("http://127.0.0.1:%d", e.singlePort) {
+		t.Fatalf("the lease must bind the ACTUAL spark01 backend, got %q", got)
+	}
+	if singleHits() <= before {
+		t.Fatal("readiness must probe the ACTUAL spark01 backend, not the saved both backend")
+	}
+	// Auto admission resolves the same actual selection.
+	if got, err := fresh.resolveAuto(ctx); err != nil || got != integrationModel {
+		t.Fatalf("auto admission: %q %v", got, err)
+	}
+
+	// The plain plan targets the SAVED default exactly: both.
+	plan2, err := c.plan(ctx, integrationModel, "load", "")
+	if err != nil {
+		t.Fatalf("plain plan: %v", err)
+	}
+	if str(plan2["placement"]) != "both" || !sameStrings(stringsOf(plan2["nodes"]), []string{"spark01", "spark02"}) {
+		t.Fatalf("plain plan must target the saved both default: %v", plan2)
+	}
+
+	// REPEATING the same explicit override while the model is already READY is
+	// the native already-ready fastpath: it must acknowledge the SAME actual
+	// confirmed selection (placement spark01, nodes [spark01]) and the distinct
+	// spark01 backend, and start no new rank.
+	startsBefore := len(e.commandsSnapshot())
+	again, err := c.Load(integrationModel, false, "spark01")
+	if err != nil {
+		if s := e.supervisorFailure(); s != "" {
+			t.Fatalf("the already-ready override must succeed: %v (%s)", err, s)
+		}
+		t.Fatalf("the already-ready override must succeed: %v", err)
+	}
+	if str(again["status"]) != "ready" || str(again["placement"]) != "spark01" ||
+		!sameStrings(stringsOf(again["nodes"]), []string{"spark01"}) ||
+		str(again["backend"]) != fmt.Sprintf("http://127.0.0.1:%d", e.singlePort) {
+		t.Fatalf("the already-ready fastpath must acknowledge the confirmed selection: %v", again)
+	}
+	for _, args := range e.commandsSnapshot()[startsBefore:] {
+		if strings.Contains(strings.Join(args, " "), " start ") {
+			t.Fatalf("an already-ready override must start no rank, got %v", args)
+		}
+	}
+	if e.startCount(integrationHead) != 1 || e.startCount(integrationWorker) != 0 {
+		t.Fatalf("an already-ready override must not restart a rank, got %+v", e.startCounts)
+	}
+
+	// Unload the one-shot placement: the frozen record is stopped and the
+	// single rank goes inactive.
+	if _, err := c.unload(ctx, integrationModel, false); err != nil {
+		t.Fatalf("the one-shot unload must succeed: %v", err)
+	}
+	if e.isRunning(integrationHead) {
+		t.Fatal("the head rank must be inactive after the unload")
+	}
+	if st := integrationRecord(t, e); str(st["state"]) != StateStopped {
+		t.Fatalf("the record must be stopped, got %s", str(st["state"]))
+	}
+
+	// A later PLAIN load applies the saved "both" default: both ranks start.
+	res3, err := c.load(ctx, integrationModel, false)
+	if err != nil {
+		if s := e.supervisorFailure(); s != "" {
+			t.Fatalf("the plain reload must succeed: %v (%s)", err, s)
+		}
+		t.Fatalf("the plain reload must succeed: %v", err)
+	}
+	if str(res3["status"]) != "ready" {
+		t.Fatalf("a plain load must succeed: %v", res3)
+	}
+	rec3 := integrationRecord(t, e)
+	if str(rec3["placement"]) != "both" || !sameStrings(stringsOf(rec3["nodes"]), []string{"spark01", "spark02"}) {
+		t.Fatalf("the plain load must freeze the saved both placement: %v", rec3)
+	}
+	if e.startCount(integrationHead) != 2 || e.startCount(integrationWorker) != 1 {
+		t.Fatalf("the plain reload must start both ranks once more, got %+v", e.startCounts)
+	}
+
+	if err := e.emulateStop(); err != nil {
+		t.Fatalf("final stop: %v", err)
+	}
+	if err := superviseNative(ctx, e.path, "cleanup", integrationModel); err != nil {
+		t.Fatalf("final cleanup: %v", err)
+	}
+	backendClosed(t, e.port)
+}
+
+// TestNativeLoadOnIntegrationMoveWithoutUnload proves a one-shot placement
+// switch while the previous placement is loaded targets EXACTLY the
+// requested nodes: the old generation is stopped and the new spark01
+// generation starts only the head rank. Reservation nodes (both) never leak
+// into the target recipe, its readiness or its durable record, and the
+// saved run_on stays both.
+func TestNativeLoadOnIntegrationMoveWithoutUnload(t *testing.T) {
+	e := newIntegrationEnv(t)
+	e.writeCentralPlacements()
+	e.installFactory()
+	savedInterval := nativeMonitorInterval
+	nativeMonitorInterval = 5 * time.Millisecond
+	t.Cleanup(func() { nativeMonitorInterval = savedInterval })
+	t.Cleanup(func() { e.joinSupervisor() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	c, err := newCoordinator(e.path, e.runtime())
+	if err != nil {
+		t.Fatalf("coordinator: %v", err)
+	}
+	// Load the saved default (both) first.
+	if _, err := c.load(ctx, integrationModel, false); err != nil {
+		t.Fatalf("the default load must succeed: %v (%s)", err, e.supervisorFailure())
+	}
+	rec := integrationRecord(t, e)
+	if str(rec["placement"]) != "both" || !sameStrings(stringsOf(rec["nodes"]), []string{"spark01", "spark02"}) {
+		t.Fatalf("the default load must freeze both: %v", rec)
+	}
+	if e.startCount(integrationHead) != 1 || e.startCount(integrationWorker) != 1 {
+		t.Fatalf("the default load must start both ranks, got %+v", e.startCounts)
+	}
+
+	// A transient spark01 load while both is loaded moves the model.
+	res, err := c.Load(integrationModel, false, "spark01")
+	if err != nil {
+		t.Fatalf("the one-shot move must succeed: %v (%s)", err, e.supervisorFailure())
+	}
+	if str(res["placement"]) != "spark01" || !sameStrings(stringsOf(res["nodes"]), []string{"spark01"}) {
+		t.Fatalf("the move result must report only spark01: %v", res)
+	}
+	rec = integrationRecord(t, e)
+	if str(rec["placement"]) != "spark01" || !sameStrings(stringsOf(rec["nodes"]), []string{"spark01"}) {
+		t.Fatalf("the moved record must freeze only spark01: %v", rec)
+	}
+	if e.isRunning(integrationWorker) {
+		t.Fatal("the worker rank must be stopped by the placement move")
+	}
+	// The head is restarted for the new generation and the worker is never
+	// started by the spark01 recipe: exactly one more head start.
+	if e.startCount(integrationHead) != 2 || e.startCount(integrationWorker) != 1 {
+		t.Fatalf("the move must start only the head once more, got %+v", e.startCounts)
+	}
+	cfg, err := readCluster(e.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := str(obj(obj(cfg["models"])[integrationModel])["run_on"]); got != "both" {
+		t.Fatalf("the saved run_on must stay both: %q", got)
+	}
+	// Inference is admitted and bound to the spark01 recipe's own backend.
+	if _, lease, err := c.LLMRequest(ctx, integrationModel); err != nil {
+		t.Fatalf("inference after the move: %v", err)
+	} else {
+		if got := c.leaseBackend(lease); got != fmt.Sprintf("http://127.0.0.1:%d", e.singlePort) {
+			t.Fatalf("the lease must bind the spark01 backend, got %q", got)
+		}
+		c.Release(lease)
+	}
+
+	if _, err := c.unload(ctx, integrationModel, false); err != nil {
+		t.Fatalf("the moved unload must succeed: %v", err)
+	}
+	if e.isRunning(integrationHead) || e.isRunning(integrationWorker) {
+		t.Fatal("no rank may run after the moved unload")
+	}
+	if err := e.emulateStop(); err != nil {
+		t.Fatalf("final stop: %v", err)
+	}
+	if err := superviseNative(ctx, e.path, "cleanup", integrationModel); err != nil {
+		t.Fatalf("final cleanup: %v", err)
+	}
+	backendClosed(t, e.port)
+}
+
+// TestNativeLoadOnIntegrationBothOnlyRefused is the real-supervisor proof
+// that a BOTH-ONLY model rejects a single-node one-shot placement BEFORE
+// any side effect: the plan and both the plain and forced loads are refused,
+// the fake transport sees no start/stop/cancel command, no durable record
+// exists and the loaded glm model keeps running.
+func TestNativeLoadOnIntegrationBothOnlyRefused(t *testing.T) {
+	e := newIntegrationEnv(t)
+	e.writeCentralBothOnly()
+	e.installFactory()
+	savedInterval := nativeMonitorInterval
+	nativeMonitorInterval = 5 * time.Millisecond
+	t.Cleanup(func() { nativeMonitorInterval = savedInterval })
+	t.Cleanup(func() { e.joinSupervisor() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	c, err := newCoordinator(e.path, e.runtime())
+	if err != nil {
+		t.Fatalf("coordinator: %v", err)
+	}
+	// glm is both-only now: load it with the default placement.
+	if _, err := c.load(ctx, integrationModel, false); err != nil {
+		t.Fatalf("the both-only default load must succeed: %v (%s)", err, e.supervisorFailure())
+	}
+	before := len(e.commandsSnapshot())
+	for _, on := range []string{"spark01", "spark02"} {
+		want := integrationBothOnly + " has no recipe for " + on + "."
+		if _, err := c.plan(ctx, integrationBothOnly, "load", on); err == nil || err.Error() != want {
+			t.Fatalf("plan %s: %v, want %q", on, err, want)
+		}
+		if _, err := c.Load(integrationBothOnly, false, on); err == nil || err.Error() != want {
+			t.Fatalf("load %s: %v, want %q", on, err, want)
+		}
+		if _, err := c.Load(integrationBothOnly, true, on); err == nil || err.Error() != want {
+			t.Fatalf("forced load %s: %v, want %q", on, err, want)
+		}
+	}
+	// No mutating command may run: the refusal precedes every stop/cancel.
+	for _, args := range e.commandsSnapshot()[before:] {
+		j := strings.Join(args, " ")
+		for _, effect := range []string{" start ", " stop ", "reset-failed", "cancel"} {
+			if strings.Contains(j, effect) {
+				t.Fatalf("a refused one-shot placement must run no mutating command, got %v", args)
+			}
+		}
+	}
+	if _, err := e.runtime().readRecord(integrationBothOnly); err == nil {
+		t.Fatal("a refused one-shot placement must not create a lifecycle record")
+	}
+	// The already-loaded glm model is untouched.
+	rec := integrationRecord(t, e)
+	if str(rec["state"]) != StateReady || str(rec["placement"]) != "both" {
+		t.Fatalf("the loaded model must stay READY on both: %v", rec)
+	}
+	if !e.isRunning(integrationHead) || !e.isRunning(integrationWorker) {
+		t.Fatal("the loaded both ranks must stay running")
+	}
+	// The saved run_on is never rewritten.
+	cfg, err := readCluster(e.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := str(obj(obj(cfg["models"])[integrationBothOnly])["run_on"]); got != "both" {
+		t.Fatalf("the saved run_on must stay both: %q", got)
+	}
+	// A both placement is valid for the both-only recipe (validation only).
+	if _, err := c.plan(ctx, integrationBothOnly, "load", "both"); err != nil {
+		t.Fatalf("plan both must be valid for a both-only model: %v", err)
+	}
+
+	if _, err := c.unload(ctx, integrationModel, false); err != nil {
+		t.Fatalf("the final unload must succeed: %v", err)
+	}
+	if err := e.emulateStop(); err != nil {
+		t.Fatalf("final stop: %v", err)
+	}
+	if err := superviseNative(ctx, e.path, "cleanup", integrationModel); err != nil {
+		t.Fatalf("final cleanup: %v", err)
 	}
 	backendClosed(t, e.port)
 }
