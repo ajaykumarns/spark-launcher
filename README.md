@@ -238,6 +238,18 @@ The staged folder must contain `models.json`. The first install creates the cent
 
 `sparky` is the sole command. Old `spark`, `spark-models`, and `opencode-spark` commands are removed. There are no compatibility wrappers.
 
+## macOS menu bar
+
+A native status icon opens a compact popover: Sparky and the current state, the
+real loaded model and placement, in-use / total memory per Spark, active
+requests, a Load model picker, Refresh status, and a footer with the last
+update. A gear menu holds start-at-login, show-title, diagnostics, and Quit.
+Build and package it with `make menubar` (see [docs/menubar.md](docs/menubar.md)
+for flags, install, settings, and signing vs notarization). Go keeps all
+business logic and runs the existing CLI in the background; a small AppKit
+bridge only draws the view. It never loads a model on its own, and never unloads
+or cancels remote work when you quit.
+
 ## Native lifecycle
 
 The central file's `lifecycle` field selects the model lifecycle. The default
