@@ -312,6 +312,42 @@ func NodeMain(args []string, in io.Reader) (any, error) {
 		}
 		return InstallHead(dir)
 
+	case "self-update":
+		// Private head-side device self-update: "node self-update --root ROOT
+		// --payload -" reads the VERIFIED release spec from standard input.
+		// Flag and payload grammar still use the ordinary node error path. A
+		// runtime failure after the transaction began keeps the partial
+		// report as the command VALUE (targets, digests and backups included)
+		// with status "error" and the cause in "error"; this command never
+		// prints or exits itself, so Main owns serialization and the exit 1.
+		flags, _, err := parseNodeFlags(rest, map[string]bool{"root": true, "payload": true}, map[string]bool{}, 0)
+		if err != nil {
+			return nil, err
+		}
+		root, err := flags.require("root")
+		if err != nil {
+			return nil, err
+		}
+		spec, err := nodePayload(in, flags.get("payload", "-"))
+		if err != nil {
+			return nil, err
+		}
+		updateCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+		defer stopSignals()
+		report, terr := updateDeviceTransaction(updateCtx, root, spec)
+		if terr == nil {
+			return report, nil
+		}
+		if report == nil {
+			// The lock was never taken or the payload grammar was refused: no
+			// effect of any kind happened, so this is an ordinary node error.
+			return nil, terr
+		}
+		report["outcome"] = report["status"]
+		report["status"] = "error"
+		report["error"] = terr.Error()
+		return report, nil
+
 	case "drain-comfy":
 		flags, _, err := parseNodeFlags(rest, map[string]bool{"file": true}, map[string]bool{}, 0)
 		if err != nil {

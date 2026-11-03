@@ -391,6 +391,56 @@ workflow creates a GitHub Release with assets attached and nothing more —
 downloading, installing, and restarting Spark stay explicit operator actions,
 and publishing never overwrites an already published release.
 
+## Updating an existing cluster
+
+With Sparky 0.6.4 or newer on the Mac, one command updates the Mac CLI
+and both Spark CLIs. Spark nodes can start from 0.6.3:
+
+```sh
+sparky update --check         # report what would change; writes nothing
+sparky update                 # apply the newest release
+sparky update --tag v0.6.4    # pin one release
+sparky update --json          # machine-readable single object
+```
+
+`sparky update` is CLI-only. It replaces the `sparky` binary on each machine
+and nothing else: no models, weights, recipes, configuration, services, or
+menu bar app change. It reads the cluster hosts and `remote_root` from the
+same central configuration every other command uses, so it needs no target
+flags of its own.
+
+How it works:
+
+- The release is resolved from GitHub and every asset is verified against
+  `SHA256SUMS` before anything is touched. A digest mismatch stops the run.
+- Everything is staged locally in a private `0700` task directory first. Each
+  Spark receives the verified Linux CLI, installer, and `BUILDINFO.json` under
+  `<remote_root>/.sparky-update/<tag>-<task>/`, and every digest is confirmed
+  by reading it back before any install runs.
+- The head runs one transaction through the **staged** binary. Each Spark
+  binary is replaced atomically with a private backup. The head controller
+  restarts only when it is active and its running binary is stale. If a step
+  fails, the transaction attempts to restore both Spark binaries.
+- The Mac updates itself last, only after both Sparks report success, using
+  the same verified installer path as a manual install. A failure anywhere
+  before that leaves the Mac binary untouched.
+- Task staging is removed after verified success or complete recovery.
+  Uncertain outcomes keep the staging files for recovery. Backups are kept.
+
+Safety gates: the run refuses while any load is queued, starting, or stopping,
+and refuses when the head controller state cannot be read at all — an
+unreadable state is treated as busy, never as idle. There is no force flag.
+The Mac needs 0.6.4 or newer. Each Spark needs 0.6.3 or newer for the
+file transfer protocol. Older installations need one manual update first.
+Target releases must publish the per-binary hashes added in 0.6.4.
+
+Exit codes: `0` success (a complete `--check` is also `0` even when an update
+is available), `1` failure or an incomplete check, `2` usage error, `130`/`143`
+interrupted. A partial per-component report is emitted even on failure or
+interrupt, so you always see what converged. `sparky node self-update` is the
+private protocol used by the updater; calling it directly returns an error
+report and exit `1`.
+
 ## macOS menu bar
 
 A native status icon opens a standard macOS menu: Sparky and the current state, the

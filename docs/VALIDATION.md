@@ -47,6 +47,35 @@ Live native state (Sparky CLI runs on the Mac and both Sparks; the controller an
 - The seven protected OCR/audio/gateway containers kept their IDs and start times; ComfyUI services were not restarted. Private backups retained.
 - Scope: other LLM recipes, image, and GPU model placements were not loaded (current model-only constraint). Relevant unit and contract tests pass; not all models are claimed live-tested. Python ComfyUI engine plugin and OCR engine bootstrap stay engine-owned exceptions. The Python Sparky trees remain reference/rollback and are unused by the installed Sparky binaries.
 
+## CLI updater verification (2026-11-03)
+
+`sparky update` and the staged `node self-update` contract were verified
+offline only. No live SSH, GitHub network call, install, or service restart
+was performed for this section.
+
+- The engine suite drives the real orchestration through injected seams:
+  release resolve/prepare, the SSH transport (a fake remote runner serving
+  version, digest, status, file-protocol, systemctl, and staged self-update
+  replies), and the local installer exec. Covered scenarios: all-current no
+  effects, `--check` availability with zero disk effects, incomplete status
+  check, queued-load refusal, unreadable controller state treated as busy,
+  stale head controller corrected by the device transaction, staged-CLI-only
+  bootstrap with distinct head/worker stage directories, per-file push digest
+  confirmation, push refusal blocking every target, remote failure blocking
+  the Mac install, Mac-installed last ordering, Mac failure preserving remote
+  success, pre-0.6.3 node refusal (`predates`), unsupported client platform,
+  cancellation keeping a partial report with exit 130, and staging cleanup
+  running even after a device rollback.
+- The CLI suite pins the public grammar (`sparky update [--check] [--tag
+  vX.Y.Z] [--json]`, nothing else, validated before any I/O), the exit
+  contract (0/1/2/130/143), the single-object `--json` report, human output
+  listing every component, help coverage, and the rule that a directly
+  invoked `sparky node self-update` answers an error report on stdout and
+  exits 1 while all other node actions keep their old contract.
+- Package checks for this change: `go vet` pass, full `go test ./internal/
+  sparky/` pass, `go test -race` pass, host build plus CGO-0 Darwin ARM64 and
+  Linux ARM64 crossbuilds pass.
+
 ## Legacy Python reference
 
 The Python-era checks below are kept as a reference and are superseded by the current Go native verification above.

@@ -276,6 +276,16 @@ func cliNodeCommand(inv *cliInvocation, in io.Reader, out io.Writer) int {
 	if err != nil {
 		return cliJSONEnvelope(out, err.Error(), cliExitCode(err))
 	}
+	// Self-update-only rule: when the private transaction finished with a
+	// report that names itself an error (and no Go error surfaced), the
+	// report is the only stdout payload and the exit code is 1. Every other
+	// node command keeps the existing success contract untouched.
+	if updateIsSelfUpdateArgs(inv.NodeArgs) {
+		if report, isObject := value.(Object); isObject && str(report["status"]) == "error" {
+			_, _ = out.Write(jsonBytes(report))
+			return 1
+		}
+	}
 	if value != nil {
 		_, _ = out.Write(jsonBytes(value))
 	}
@@ -335,6 +345,8 @@ func cliDispatch(ctx context.Context, cfg clientConfig, inv *cliInvocation, in i
 		return cliLoadCommand(ctx, cfg, inv, out, errout)
 	case "sync":
 		return cliSyncCommand(ctx, cfg, inv, out, errout)
+	case "update":
+		return cliUpdateCommand(ctx, cfg, inv, out, errout)
 	case "doctor":
 		data := cliDoctor(cfg, cliPositionalOr(inv, "harness", ""))
 		cliEmitView(inv, out, data, cliRender(inv, out, "doctor", data))

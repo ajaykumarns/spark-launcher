@@ -81,7 +81,7 @@ var cliHarnessCommands = []string{"claude", "hermes", "codex", "opencode"}
 var cliCommandList = append([]string{
 	"status", "models", "devices", "ocr", "plan", "load", "unload",
 	"image-profile", "config", "run", "sync", "logs", "doctor", "ui",
-	"init", "admin", "node",
+	"update", "init", "admin", "node",
 }, cliHarnessCommands...)
 
 // cliSpecs describes the accepted flags and positionals per command. Every
@@ -150,8 +150,12 @@ var cliSpecs = map[string]*cliSpec{
 		posChoices:  map[int][]string{0: []string{"comfyui"}},
 		strFlags:    []string{"--on"},
 		flagChoices: map[string][]string{"--on": cliWorkflowNodes}},
-	"sync":   {posMax: 0},
-	"logs":   {posMax: 0, strFlags: []string{"--limit"}},
+	"sync": {posMax: 0},
+	"logs": {posMax: 0, strFlags: []string{"--limit"}},
+	// update: Mac CLI + both Sparks to one verified release. No --force, no
+	// targets, no repo option: those decisions belong to the release and the
+	// device transaction, not to the command line.
+	"update": {posMax: 0, strFlags: []string{"--tag"}, boolFlags: []string{"--check"}},
 	"doctor": {posMax: 1, posNames: []string{"harness"}, posChoices: map[int][]string{0: cliHarnessCommands}},
 	"ui":     {posMax: 0},
 	"init": {posMax: 0,
@@ -191,6 +195,7 @@ Commands:
   sync             Refresh the Hermes Spark provider from the live model list
   logs             Recent local harness launches (--limit N)
   doctor [HARNESS] Check gateway access and harness installation; no inference
+  update           Update the Mac CLI and both Sparks (--check previews only)
   ui               Open the gateway UI (--json prints the URL)
   init             Create the client connection file (--gateway REQUIRED)
   admin ACTION     ssh [spark01|spark02] | enable-harnesses
@@ -201,6 +206,7 @@ Examples:
   sparky models
   sparky plan load glm
   sparky load glm --on spark01
+  sparky update --check
   sparky claude --model qwen -- --continue
   sparky status --json
 

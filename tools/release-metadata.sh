@@ -21,7 +21,8 @@
 # It then writes, into --dir:
 #
 #   SHA256SUMS               checksums of the three published assets
-#   release-metadata.json    tag, version, commit, platforms, assets, digests
+#   release-metadata.json    tag, version, commit, platforms, per-binary
+#                            digests (binary_sha256), assets, checksums
 #
 # and, when --notes is given, the release notes file for 'gh release create'.
 # This script never uploads, publishes, deploys, installs or restarts anything.
@@ -176,6 +177,52 @@ tar -xzf "$DIR/$MAC_TGZ" -C "$MAC_OUT" || die "could not unpack $MAC_TGZ"
 verify_tree "$LINUX_OUT" "sparky-$VERSION-linux-arm64" "linux/arm64"
 verify_tree "$MAC_OUT" "sparky-$VERSION-darwin-arm64" "darwin/arm64"
 
+# --- 3b. publish per-binary digests for 'sparky update --check' -------------
+# 'sparky update --check' must inspect the exact per-binary hashes without ever
+# downloading an archive, so release-metadata.json carries a top-level
+# binary_sha256 object keyed by platform and binary name. The values are read
+# from the BUILDINFO.json files already unpacked and verified above; each digest
+# is re-hashed against the actual bytes so a tampered archive cannot inject a
+# per-binary hash that disagrees with what it really contains.
+if ! command -v python3 >/dev/null 2>&1; then
+	die "python3 is required to read BUILDINFO per-binary digests"
+fi
+
+read_bin_digest() { # read_bin_digest BUILDINFO BINFILE RELPATH LABEL
+	if ! python3 - "$1" "$2" "$3" <<'PY'
+import hashlib, json, re, sys
+buildinfo, binfile, relpath = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(buildinfo) as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(1)
+want = None
+for b in data.get("binaries", []):
+    if isinstance(b, dict) and b.get("path") == relpath:
+        want = b.get("sha256")
+if not isinstance(want, str) or re.fullmatch(r"[0-9a-f]{64}", want) is None:
+    sys.exit(1)
+h = hashlib.sha256()
+with open(binfile, "rb") as fh:
+    for chunk in iter(lambda: fh.read(65536), b""):
+        h.update(chunk)
+if h.hexdigest() != want:
+    sys.exit(1)
+sys.stdout.write(want)
+PY
+	then
+		die "BUILDINFO per-binary digest does not match the actual bytes for $4"
+	fi
+}
+
+LINUX_TOP="sparky-$VERSION-linux-arm64"
+MAC_TOP="sparky-$VERSION-darwin-arm64"
+LINUX_CLI_SHA=$(read_bin_digest "$LINUX_OUT/$LINUX_TOP/BUILDINFO.json" "$LINUX_OUT/$LINUX_TOP/bin/sparky" "bin/sparky" "linux/arm64 bin/sparky")
+LINUX_INSTALLER_SHA=$(read_bin_digest "$LINUX_OUT/$LINUX_TOP/BUILDINFO.json" "$LINUX_OUT/$LINUX_TOP/bin/sparky-install" "bin/sparky-install" "linux/arm64 bin/sparky-install")
+MAC_CLI_SHA=$(read_bin_digest "$MAC_OUT/$MAC_TOP/BUILDINFO.json" "$MAC_OUT/$MAC_TOP/bin/sparky" "bin/sparky" "darwin/arm64 bin/sparky")
+MAC_INSTALLER_SHA=$(read_bin_digest "$MAC_OUT/$MAC_TOP/BUILDINFO.json" "$MAC_OUT/$MAC_TOP/bin/sparky-install" "bin/sparky-install" "darwin/arm64 bin/sparky-install")
+
 if command -v unzip >/dev/null 2>&1; then
 	unzip -tq "$DIR/$MAC_ZIP" >/dev/null || die "$MAC_ZIP is corrupt"
 	unzip -q "$DIR/$MAC_ZIP" -d "$APP_OUT" || die "could not unpack $MAC_ZIP"
@@ -217,6 +264,10 @@ cat >"$DIR/release-metadata.json" <<METADATA
   "notarized": false,
   "checksums_file": "SHA256SUMS",
   "checksums_sha256": "$SUMS_SUM",
+  "binary_sha256": {
+    "darwin/arm64": { "sparky": "$MAC_CLI_SHA", "sparky-install": "$MAC_INSTALLER_SHA" },
+    "linux/arm64": { "sparky": "$LINUX_CLI_SHA", "sparky-install": "$LINUX_INSTALLER_SHA" }
+  },
   "assets": [
     {
       "file": "$LINUX_TGZ",
