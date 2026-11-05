@@ -79,6 +79,9 @@ func makePlan(c Object, name string, snapshot Object, action, on string) (Object
 			if other == name || str(row["kind"]) != "llm" || !boolean(row["loaded"]) || !overlapNodes(nodes, stringsOf(row["nodes"])) {
 				continue
 			}
+			if boolean(s["shared_device"]) && boolean(row["shared_device"]) && str(row["state"]) == StateReady {
+				continue
+			}
 			// Protected models are never evicted, not even with waiting jobs:
 			// the effective policy merges the config keep_loaded and the
 			// protected_models allowlist, exactly like the load path.

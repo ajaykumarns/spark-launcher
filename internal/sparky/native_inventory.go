@@ -131,6 +131,7 @@ func (r *Runtime) nativeOwnership(ctx context.Context) (Object, error) {
 		}
 		out[name] = Object{
 			"kind":            "llm",
+			"shared_device":   boolean(frozenSetting["shared_device"]),
 			"state":           state,
 			"nodes":           nodes,
 			"loaded":          reserved,

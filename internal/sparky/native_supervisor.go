@@ -42,6 +42,14 @@ var (
 // responsible for closing the returned files (releasing the locks) only
 // after its cleanup attempts have finished.
 func nativeLockPaths(ctx context.Context, paths []string) ([]*os.File, error) {
+	return nativeLockPathsMode(ctx, paths, false)
+}
+
+func nativeLockPathsMode(ctx context.Context, paths []string, shared bool) ([]*os.File, error) {
+	mode := syscall.LOCK_EX
+	if shared {
+		mode = syscall.LOCK_SH
+	}
 	var held []*os.File
 	closeHeld := func() {
 		for _, f := range held {
@@ -60,7 +68,7 @@ func nativeLockPaths(ctx context.Context, paths []string) ([]*os.File, error) {
 				closeHeld()
 				return nil, err
 			}
-			e := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+			e := syscall.Flock(int(f.Fd()), mode|syscall.LOCK_NB)
 			if e == nil {
 				held = append(held, f)
 				break
@@ -158,17 +166,10 @@ func nativeRankStates(ctx context.Context, r *Runtime, node, unit string) (strin
 	return load, active, nil
 }
 
-// nativeNoOwnedOverlap refuses the start while any other lifecycle record
-// holds a RESERVATION on one of the nodes this operation owns. The strict
-// nativeOwnership scanner is the single validation authority: every record
-// is validated with the real record shape rules, and a corrupt, malformed,
-// symlinked, oversized or otherwise invalid record is an ERROR that refuses
-// the start — never a free device. ANY non-stopped validated record on an
-// overlapping node refuses the start regardless of its units' activity or
-// unit names: a reservation is ownership, not resident weights, and
-// disabled or deleted models keep holding their recorded nodes. Only a
-// validated stopped record releases its devices.
-func nativeNoOwnedOverlap(ctx context.Context, r *Runtime, name string, nodes []string) error {
+// nativeNoOwnedOverlap checks durable reservations. An overlapping ready
+// owner is compatible only when both frozen recipes allow sharing. Other
+// reservations block startup. Invalid records always fail closed.
+func nativeNoOwnedOverlap(ctx context.Context, r *Runtime, name string, nodes []string, shared bool) error {
 	own, err := r.nativeOwnership(ctx)
 	if err != nil {
 		return fail("Cannot confirm ownership of a required device: %v.", err)
@@ -178,6 +179,9 @@ func nativeNoOwnedOverlap(ctx context.Context, r *Runtime, name string, nodes []
 			continue
 		}
 		if !boolean(obj(v)["reserved"]) {
+			continue
+		}
+		if shared && boolean(obj(v)["shared_device"]) && str(obj(v)["state"]) == StateReady {
 			continue
 		}
 		for _, node := range stringsOf(obj(v)["nodes"]) {
@@ -347,7 +351,7 @@ func nativeRun(ctx context.Context, r *Runtime, name, gen string, s Object, node
 	for _, node := range sorted {
 		lockPaths = append(lockPaths, filepath.Join(stateDir, "owner."+node+".lock"))
 	}
-	locks, err := nativeLockPaths(ctx, lockPaths)
+	locks, err := nativeLockPathsMode(ctx, lockPaths, boolean(s["shared_device"]))
 	if err != nil {
 		return err
 	}
@@ -460,7 +464,7 @@ func nativeStartup(ctx context.Context, r *Runtime, name, gen string, s Object, 
 			return fail("%s is not free on %s. No rank was started.", str(units[node]), node)
 		}
 	}
-	if err := nativeNoOwnedOverlap(ctx, r, name, nodes); err != nil {
+	if err := nativeNoOwnedOverlap(ctx, r, name, nodes, boolean(s["shared_device"])); err != nil {
 		return err
 	}
 	snapshot, err := r.snapshot(ctx, true)
