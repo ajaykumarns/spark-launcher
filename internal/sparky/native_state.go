@@ -151,6 +151,10 @@ func lifecycleFingerprint(key string, m, s Object, nodes []string, placement str
 		"nodes":                 anyStrings(nodes),
 		"placement":             placement,
 	}
+	// Preserve fingerprints of existing exclusive recipes.
+	if boolean(s["shared_device"]) {
+		selected["shared_device"] = true
+	}
 	sum := sha256.Sum256([]byte(canonicalValue(selected)))
 	return hex.EncodeToString(sum[:])
 }

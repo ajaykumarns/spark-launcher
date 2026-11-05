@@ -246,6 +246,21 @@ func conflicts(cfg Object, aName string, aNodes []string, aExclusive bool, bName
 	return true
 }
 
+// conflicts keeps sharing restricted to the validated recipes of running models.
+func (c *Coordinator) conflicts(a string, an []string, ax bool, b string, bn []string, bx bool) bool {
+	if !conflicts(c.config, a, an, ax, b, bn, bx) {
+		return false
+	}
+	if ax || bx || a == b || !c.runtime.native() {
+		return true
+	}
+	as, ae := c.loadedSelection(a)
+	bs, be := c.loadedSelection(b)
+	return ae != nil || be != nil || !as.Actual || !bs.Actual ||
+		str(as.Record["state"]) != StateReady || str(bs.Record["state"]) != StateReady ||
+		!boolean(as.Setting["shared_device"]) || !boolean(bs.Setting["shared_device"])
+}
+
 // acquire admits a job. With wait=true it queues FIFO until the devices are
 // free, the context is cancelled or a forced operation cancels the entry.
 // With wait=false (ComfyUI retries) it returns "" promptly while keeping the
@@ -308,7 +323,7 @@ func (c *Coordinator) acquire(ctx context.Context, name string, nodes []string, 
 			if l.Name == name {
 				count++
 			}
-			blocked = blocked || conflicts(c.config, name, nodes, exclusive, l.Name, l.Nodes, l.Exclusive)
+			blocked = blocked || c.conflicts(name, nodes, exclusive, l.Name, l.Nodes, l.Exclusive)
 		}
 		if limit > 0 && count >= limit {
 			blocked = true
@@ -317,7 +332,7 @@ func (c *Coordinator) acquire(ctx context.Context, name string, nodes []string, 
 			if p == entry {
 				break
 			}
-			if !p.Cancelled && conflicts(c.config, name, nodes, exclusive, p.Name, p.Nodes, p.Exclusive) {
+			if !p.Cancelled && c.conflicts(name, nodes, exclusive, p.Name, p.Nodes, p.Exclusive) {
 				blocked = true
 			}
 		}
@@ -836,6 +851,9 @@ func (c *Coordinator) loadInternal(ctx context.Context, requested, forceID strin
 		// Only the TARGET nodes drive which other models conflict. This
 		// model's own old placement is released explicitly below.
 		if str(row["kind"]) != "llm" || !boolean(row["loaded"]) || (!overlapNodes(nodes, stringsOf(row["nodes"])) && other != name) {
+			continue
+		}
+		if other != name && rt.native() && boolean(s["shared_device"]) && boolean(row["shared_device"]) && str(row["state"]) == StateReady {
 			continue
 		}
 		if other == name && rt.native() && rt.adoptSelf(operationCtx, name, m, s, nodes, placement) {

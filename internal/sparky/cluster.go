@@ -295,6 +295,9 @@ func validateCluster(c Object) error {
 			if !boolField(s, "enabled") || !isObject(value(s, "parameters", Object{})) {
 				return fail("Invalid recipe settings for %s/%s.", name, on)
 			}
+			if !boolField(s, "shared_device") {
+				return fail("Invalid shared device setting for %s/%s.", name, on)
+			}
 			mins := value(s, "minimum_available_gib", Object{})
 			if !isObject(mins) {
 				return fail("Invalid startup memory check.")
@@ -302,6 +305,16 @@ func validateCluster(c Object) error {
 			for n, v := range obj(mins) {
 				if !contains(placements[on], n) || !finite(v) || num(v) < 0 {
 					return fail("Invalid startup memory check for %s/%s.", name, on)
+				}
+			}
+			if boolean(s["shared_device"]) {
+				if str(value(c, "lifecycle", "legacy")) != "native" || kind != "llm" {
+					return fail("Shared devices require a native language model.")
+				}
+				for _, n := range placements[on] {
+					if !finite(obj(mins)[n]) || num(obj(mins)[n]) <= 0 {
+						return fail("A shared recipe needs a positive startup memory check for each device.")
+					}
 				}
 			}
 			if kind == "llm" {

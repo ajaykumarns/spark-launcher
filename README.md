@@ -610,3 +610,9 @@ These commands do not load, unload, or restart language models. OCR is a separat
 Docker service. Resource admission for language and image models does not account
 for OCR allocations. A GPU allocation failure produces an OCR error. This interface
 does not add a new scheduling or model-switch policy.
+
+### Sharing a device between language models
+
+A language model owns its devices exclusively by default. With the native lifecycle, a placement can set `shared_device: true` to permit other opted-in language models on the same device. Each shared placement must specify a positive `minimum_available_gib` for every device it uses. This is the free memory required before that model starts. Set it high enough for the model's full runtime allocation and the memory reserve needed by the host. Bound each backend's memory use separately; this check is not a runtime memory limit.
+
+Sparky admits a new model only after existing shared owners are ready. It keeps the selected recipe for each running model, so a later catalog edit cannot change that model's ownership. Models that do not opt in remain exclusive. The legacy lifecycle does not support this setting.

@@ -385,12 +385,13 @@ func (r *Runtime) snapshot(ctx context.Context, fresh bool) (Object, error) {
 			m["nodes"] = unionNodes(stringsOf(m["nodes"]), recorded)
 			m["loaded"] = true
 			m["reserved"] = true
+			m["shared_device"] = row["shared_device"]
 			m["keep_loaded"] = row["keep_loaded"]
 			models[name] = m
 			continue
 		}
 		models[name] = Object{"kind": "llm", "loaded": true, "reserved": true,
-			"nodes": unionNodes(nil, recorded), "desired": nil,
+			"nodes": unionNodes(nil, recorded), "desired": nil, "shared_device": row["shared_device"],
 			"state": str(row["state"]), "keep_loaded": row["keep_loaded"],
 			"active_requests": 0}
 	}
