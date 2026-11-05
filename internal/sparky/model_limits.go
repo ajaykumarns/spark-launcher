@@ -23,6 +23,15 @@ func (c *Coordinator) LiveCatalog() Object {
 			delete(row, key)
 		}
 		row["dynamic"], row["available"] = true, false
+		if bifrostAuto(c.cfg()) {
+			row["routing"], row["request_model"] = "bifrost", "spark-auto"
+			c.mu.Lock()
+			for key, value := range c.autoPool {
+				row[key] = value
+			}
+			c.mu.Unlock()
+			continue
+		}
 		if err := c.reconfigure.lock(ctx); err != nil {
 			continue
 		}

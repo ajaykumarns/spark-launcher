@@ -49,6 +49,7 @@ type Coordinator struct {
 	generation              map[string]uint64
 	fenced, reloading       bool
 	imageGate               chan struct{}
+	autoPool                Object
 }
 
 func newCoordinator(path string, rt *Runtime) (*Coordinator, error) {
@@ -429,6 +430,11 @@ func (c *Coordinator) snapshot(ctx context.Context, fresh bool) (Object, error) 
 		}
 	}
 	data["admission"] = c.admission()
+	if bifrostAuto(c.cfg()) {
+		c.mu.Lock()
+		data["auto_routing"] = copyObject(c.autoPool)
+		c.mu.Unlock()
+	}
 	data["config_path"] = c.path
 	return data, nil
 }
@@ -585,6 +591,9 @@ func (c *Coordinator) llmRequest(ctx context.Context, requested string) (string,
 		return "", "", err
 	}
 	cfg := c.cfg()
+	if bifrostAuto(cfg) && (autoRequested(requested) || requested == "sparky-auto-unavailable") {
+		return "", "", autoUnavailableError{"Automatic inference must use the Bifrost spark-auto route. No automatic target is available, or the caller used a provider-prefixed alias."}
+	}
 	var name string
 	var err error
 	if normalized := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(requested)), "garuda/"); normalized == "auto" || normalized == "spark-auto" {
@@ -847,11 +856,17 @@ func (c *Coordinator) loadInternal(ctx context.Context, requested, forceID strin
 				// a stopped record never blocks the later adoption.
 				samePlacement := sameStrings(stringsOf(row["nodes"]), nodes) && str(row["placement"]) == placement
 				if !samePlacement || !rt.adoptSelf(operationCtx, name, m, s, nodes, placement) {
+					if err := c.syncAutoRoutesLocked(operationCtx, []string{other}); err != nil {
+						return nil, err
+					}
 					if err := rt.stopModel(operationCtx, other); err != nil {
 						return nil, err
 					}
 				}
 				continue
+			}
+			if err := c.syncAutoRoutesLocked(operationCtx, []string{other}); err != nil {
+				return nil, err
 			}
 			if err := rt.stopModel(operationCtx, other); err != nil {
 				return nil, err
@@ -962,6 +977,11 @@ func (c *Coordinator) unload(ctx context.Context, requested string, force bool) 
 		return nil, err
 	}
 	nodes = unionNodes(nodes, stringsOf(obj(obj(snapshot["models"])[name])["nodes"]))
+	if str(m["kind"]) == "llm" {
+		if err := c.syncAutoRoutesLocked(ctx, []string{name}); err != nil {
+			return nil, err
+		}
+	}
 	id, err := c.acquire(ctx, name, nodes, true, 0, "", "", true)
 	if err != nil {
 		return nil, err
@@ -1188,6 +1208,11 @@ func (c *Coordinator) force(ctx context.Context, requested, action string, on ..
 	if err := c.transition.lock(lockCtx); err != nil {
 		c.reconfigure.unlock()
 		return nil, fail("An earlier model operation did not stop within 30 seconds.")
+	}
+	if syncErr := c.syncAutoRoutesLocked(ctx, keys(affected)); syncErr != nil {
+		c.transition.unlock()
+		c.reconfigure.unlock()
+		return nil, syncErr
 	}
 	for _, other := range keys(affected) {
 		if err = c.runtime.stopModel(ctx, other); err != nil {
@@ -1601,12 +1626,14 @@ func (c *Coordinator) Plan(model, action, on string) (Object, error) {
 func (c *Coordinator) Load(model string, force bool, on string) (Object, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
-	return c.load(ctx, model, force, on)
+	result, err := c.load(ctx, model, force, on)
+	return c.finishAutoOperation(result, err)
 }
 func (c *Coordinator) Unload(model string, force bool) (Object, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
-	return c.unload(ctx, model, force)
+	result, err := c.unload(ctx, model, force)
+	return c.finishAutoOperation(result, err)
 }
 func (c *Coordinator) SetPlacement(model, on string) (Object, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

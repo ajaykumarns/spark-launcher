@@ -111,6 +111,9 @@ func ServeController(configPath string) error {
 		return err
 	}
 	s := &controllerServer{ctrl: ctrl}
+	if routing, ok := ctrl.(interface{ ReconcileAutoRouting() error }); ok {
+		_ = routing.ReconcileAutoRouting()
+	}
 	cfg := ctrl.Config()
 	port := controllerPort(cfg)
 	if port == 0 {
@@ -179,6 +182,9 @@ func ServeController(configPath string) error {
 						}
 					}()
 					ctrl.ReconcileJobs()
+					if routing, ok := ctrl.(interface{ ReconcileAutoRouting() error }); ok {
+						_ = routing.ReconcileAutoRouting()
+					}
 				}()
 			}
 		}
@@ -661,7 +667,12 @@ func (s *controllerServer) serveInference(w http.ResponseWriter, r *http.Request
 		if r.Context().Err() != nil {
 			return // the client is gone; no envelope can be delivered
 		}
-		s.failRequest(w, http.StatusConflict, err.Error())
+		status := http.StatusConflict
+		var statusError interface{ HTTPStatus() int }
+		if errors.As(err, &statusError) {
+			status = statusError.HTTPStatus()
+		}
+		s.failRequest(w, status, err.Error())
 		return
 	}
 	var released sync.Once

@@ -81,6 +81,27 @@ sparky load qwen
 
 A placement change applies on the next load. Use a plan first to see which idle models must leave memory. Resource plans never stop services.
 
+Set `auto.routing` to `bifrost` to share new sessions across ready models in
+`auto.targets`. Bifrost chooses with equal weights and remembers each session's
+provider and model. Send the bare model name `spark-auto` and a stable
+`x-bf-session-id`. The launchers use each coding harness's native conversation
+ID. Hermes uses its conversation root for main and auxiliary requests.
+
+Sparky updates its owned `sparky-spark-auto` rule after readiness and before a
+planned model stop. It also checks availability at controller startup and on
+the reconciliation loop. A stopped or failed model leaves the route pool.
+Its sessions move to a remaining model on their next successful request.
+An empty pool returns HTTP 503. A failed gateway update prevents a planned
+unload and appears in the catalog's `routing_error` field.
+
+The automatic catalog publishes a common token budget from all permitted
+model recipes and the running deployments. This keeps the budget valid when
+an already permitted smaller model loads. Changes to the permitted recipes
+can still reduce that budget. Named model requests retain each model's limits.
+Bifrost's session bindings expire after one idle hour by default and reset
+when its binding store resets. Parallel first requests can use different
+routes until the first response establishes the binding.
+
 ### Load a model on one node
 
 Use `--on` to select a placement for one load. For example, Qwen Flash Next's
