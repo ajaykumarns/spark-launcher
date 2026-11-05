@@ -87,6 +87,9 @@ func buildHarnessPlan(cfg clientConfig, catalog Object, model Object, harness, p
 	}
 	origin, prefix := cfg.Gateway, cfg.ModelPrefix
 	modelID := str(model["id"])
+	if str(model["routing"]) == "bifrost" && str(model["request_model"]) == "spark-auto" {
+		modelID = "spark-auto"
+	}
 	if !integer(model["context_tokens"]) || int(num(model["context_tokens"])) <= 0 {
 		return nil, fail("Model context budget is invalid for %s.", modelID)
 	}
@@ -113,6 +116,11 @@ func buildHarnessPlan(cfg clientConfig, catalog Object, model Object, harness, p
 	}
 	env := obj(plan["environment_overrides"])
 	headers := Object{"X-Client-ID": "sparky/" + harness, "X-Session-ID": session}
+	if str(model["routing"]) == "bifrost" && harness != "hermes" {
+		// These harnesses send their own conversation IDs. A launch ID would
+		// override them and would change when a saved conversation resumes.
+		delete(headers, "X-Session-ID")
+	}
 	headerText := ""
 	for _, k := range keys(headers) {
 		if headerText != "" {
@@ -174,6 +182,10 @@ func buildHarnessPlan(cfg clientConfig, catalog Object, model Object, harness, p
 		for _, itemAny := range arr(catalog["models"]) {
 			item := obj(itemAny)
 			id := str(item["id"])
+			requestID := id
+			if str(item["routing"]) == "bifrost" && str(item["request_model"]) == "spark-auto" {
+				requestID = "spark-auto"
+			}
 			limits := Object{"context": int(num(item["context_tokens"]))}
 			if int(num(value(item, "output_tokens", 0))) > 0 {
 				limits["output"] = int(num(item["output_tokens"]))
@@ -183,7 +195,7 @@ func buildHarnessPlan(cfg clientConfig, catalog Object, model Object, harness, p
 				inputs = []string{"text"}
 			}
 			models[strings.TrimPrefix(id, prefix)] = Object{
-				"id": id, "name": str(value(item, "name", id)), "limit": limits,
+				"id": requestID, "name": str(value(item, "name", id)), "limit": limits,
 				"toolcall": true, "reasoning": boolean(value(item, "reasoning", false)),
 				"modalities": Object{"input": anyStrings(inputs), "output": anyStrings([]string{"text"})},
 			}
@@ -374,11 +386,16 @@ func harnessOwnedProvider(cfg clientConfig, catalog Object) Object {
 	models := Object{}
 	for _, mAny := range arr(catalog["models"]) {
 		m := obj(mAny)
-		models[str(m["id"])] = Object{
-			"context_length":        int(num(m["context_tokens"])),
+		entry := Object{
 			"timeout_seconds":       timeout,
 			"stale_timeout_seconds": timeout,
 		}
+		// spark-auto is a mutable route. Hermes reads its active deployment
+		// limits before requests; a generated pin would disable that lookup.
+		if !strings.HasSuffix(str(m["id"]), "/spark-auto") {
+			entry["context_length"] = int(num(m["context_tokens"]))
+		}
+		models[str(m["id"])] = entry
 	}
 	return Object{
 		"name":                    "Spark Gateway",
@@ -389,6 +406,7 @@ func harnessOwnedProvider(cfg clientConfig, catalog Object) Object {
 		"stale_timeout_seconds":   timeout,
 		"models":                  models,
 		"extra_headers":           Object{"X-Client-ID": "sparky/hermes"},
+		"session_affinity_header": "x-bf-session-id",
 	}
 }
 
@@ -656,7 +674,7 @@ func harnessSyncHermesChanged(cfg clientConfig, catalog Object, session string) 
 			// Owned fields: replace value nodes, keeping key nodes (and their
 			// comments) and transferring relevant value comments.
 			for _, k := range []string{"name", "api", "transport", "discover_models",
-				"request_timeout_seconds", "stale_timeout_seconds", "models"} {
+				"request_timeout_seconds", "stale_timeout_seconds", "models", "session_affinity_header"} {
 				v, err := harnessNodeFromValue(owned[k])
 				if err != nil {
 					return err
@@ -774,6 +792,9 @@ func harnessCodexCatalog(cfg clientConfig, catalog Object, plan Object) error {
 			inputs = []string{"text"}
 		}
 		entry["slug"] = str(m["id"])
+		if str(m["routing"]) == "bifrost" && str(m["request_model"]) == "spark-auto" {
+			entry["slug"] = "spark-auto"
+		}
 		entry["display_name"] = str(value(m, "name", str(m["id"])))
 		entry["description"] = "Spark Gateway"
 		entry["context_window"] = int(num(m["context_tokens"]))

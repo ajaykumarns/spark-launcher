@@ -259,7 +259,7 @@ func clientMakeCatalog(cfg clientConfig, wire Object) (Object, error) {
 		}
 		models = append(models, model)
 	}
-	if auto != nil && len(models) > 0 {
+	if auto != nil && len(models) > 0 && !(auto["dynamic"] == true && auto["available"] == false) {
 		minimum := 0
 		for i, m := range models {
 			if i == 0 || num(m["context_tokens"]) < float64(minimum) {
@@ -270,7 +270,7 @@ func clientMakeCatalog(cfg clientConfig, wire Object) (Object, error) {
 			minimum = int(num(auto["context_length"]))
 		}
 		autoModel := Object{}
-		for _, k := range []string{"name", "aliases", "output_tokens", "inputs"} {
+		for _, k := range []string{"name", "aliases", "output_tokens", "inputs", "routing", "request_model"} {
 			if v, present := auto[k]; present {
 				autoModel[k] = v
 			}

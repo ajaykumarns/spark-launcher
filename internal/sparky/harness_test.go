@@ -589,6 +589,10 @@ settings:
 		t.Fatalf("bad timeouts: %v", spark)
 	}
 	models := spark["models"].(map[string]any)
+	auto := models["garuda/spark-auto"].(map[string]any)
+	if _, pinned := auto["context_length"]; pinned {
+		t.Fatal("mutable auto route must not receive a generated context pin")
+	}
 	other := models["garuda/other"].(map[string]any)
 	if other["context_length"] != 128000 || other["timeout_seconds"] != 90 {
 		t.Fatalf("bad model entry: %v", other)

@@ -415,6 +415,9 @@ func validateCluster(c Object) error {
 	}
 	if av, ok := c["auto"]; ok {
 		a := obj(av)
+		if routing := str(a["routing"]); routing != "" && routing != "bifrost" {
+			return fail("Auto routing must be bifrost or omitted for priority routing.")
+		}
 		if !isObject(av) || !validStrings(a["targets"]) || len(arr(a["targets"])) == 0 || !contains(stringsOf(a["targets"]), str(a["default"])) {
 			return fail("Auto targets and default must name enabled language models.")
 		}
