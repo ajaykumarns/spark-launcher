@@ -374,11 +374,16 @@ func harnessOwnedProvider(cfg clientConfig, catalog Object) Object {
 	models := Object{}
 	for _, mAny := range arr(catalog["models"]) {
 		m := obj(mAny)
-		models[str(m["id"])] = Object{
-			"context_length":        int(num(m["context_tokens"])),
+		entry := Object{
 			"timeout_seconds":       timeout,
 			"stale_timeout_seconds": timeout,
 		}
+		// spark-auto is a mutable route. Hermes reads its active deployment
+		// limits before requests; a generated pin would disable that lookup.
+		if !strings.HasSuffix(str(m["id"]), "/spark-auto") {
+			entry["context_length"] = int(num(m["context_tokens"]))
+		}
+		models[str(m["id"])] = entry
 	}
 	return Object{
 		"name":                    "Spark Gateway",

@@ -88,7 +88,12 @@ type controllerServer struct {
 // modelCatalog(config).
 var catalogHook = modelCatalog
 
-func (s *controllerServer) catalog() Object { return catalogHook(s.ctrl.Config()) }
+func (s *controllerServer) catalog() Object {
+	if live, ok := s.ctrl.(interface{ LiveCatalog() Object }); ok {
+		return live.LiveCatalog()
+	}
+	return catalogHook(s.ctrl.Config())
+}
 
 // ServeController binds the loopback and the configured Spark 1 direct link
 // only, reconciles ComfyUI jobs periodically, and shuts down gracefully on
@@ -339,6 +344,7 @@ func (s *controllerServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.unavailable(w, err)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-store")
 		s.respond(w, http.StatusOK, s.catalog())
 	case path == "/v1/images/generations" && r.Method == http.MethodPost:
 		body, ok := s.jsonBody(w, r)
