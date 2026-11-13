@@ -191,7 +191,7 @@ func TestBuildHarnessPlanOpenCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(arr(plan["args"]), []any{"--model", "spark/other"}) {
+	if len(arr(plan["args"])) != 0 {
 		t.Fatalf("bad args: %v", plan["args"])
 	}
 	env := obj(plan["environment_overrides"])
@@ -220,6 +220,74 @@ func TestBuildHarnessPlanOpenCode(t *testing.T) {
 	// spark-auto appears in the model map exactly like the other catalog rows.
 	if _, ok := models["spark-auto"]; !ok {
 		t.Fatal("auto model missing from map")
+	}
+}
+
+func TestOpenCodeLaunchOptions(t *testing.T) {
+	for _, standalone := range []bool{false, true} {
+		name := "v1"
+		help := "Usage: opencode [project]"
+		if standalone {
+			name = "v2"
+			help += " --standalone"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("SPARKY_STATE_DIR", root)
+			bin := filepath.Join(root, "opencode")
+			script := "#!/bin/sh\nif [ \"$1\" = --help ]; then echo '" + help + "'; exit 0; fi\n" +
+				"for arg do\n  [ \"$arg\" != --model ] || exit 42\ndone\n" +
+				"printf '%s\\n' \"$@\"\nprintf 'CONFIG\\n%s\\n' \"$OPENCODE_CONFIG_CONTENT\"\n"
+			if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			cfg := harnessTestConfig(t, map[string]string{"opencode": bin})
+			for i, extra := range [][]string{nil, {"run", "test prompt"}, {"mini"}} {
+				plan, err := buildHarnessPlan(cfg, harnessTestCatalog(), harnessModel("garuda/other"), "opencode", root, itoa(i))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var out, errOut strings.Builder
+				code, err := harnessLaunch(cfg, harnessTestCatalog(), plan, extra, nil, &out, &errOut)
+				if err != nil || code != 0 {
+					t.Fatalf("launch: %d %v %s", code, err, errOut.String())
+				}
+				parts := strings.SplitN(out.String(), "CONFIG\n", 2)
+				if len(parts) != 2 {
+					t.Fatalf("missing child config: %q", out.String())
+				}
+				got := []string{}
+				if args := strings.TrimSpace(parts[0]); args != "" {
+					got = strings.Split(args, "\n")
+				}
+				want := append([]string{}, extra...)
+				if standalone {
+					want = append([]string{"--standalone"}, want...)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("args: %v, want %v", got, want)
+				}
+				var raw Object
+				if err := json.Unmarshal([]byte(parts[1]), &raw); err != nil {
+					t.Fatal(err)
+				}
+				if raw["model"] != "spark/other" || obj(raw["provider"])["spark"] == nil {
+					t.Fatalf("lost model or provider: %v", raw)
+				}
+			}
+		})
+	}
+}
+
+func TestOpenCodeLaunchOptionsError(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "opencode")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := harnessTestConfig(t, map[string]string{"opencode": bin})
+	_, err := buildHarnessPlan(cfg, harnessTestCatalog(), harnessModel("garuda/other"), "opencode", t.TempDir(), "test")
+	if err == nil || !strings.Contains(err.Error(), "Cannot read OpenCode launch options") {
+		t.Fatalf("expected launch options error: %v", err)
 	}
 }
 

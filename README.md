@@ -218,6 +218,11 @@ The local file `~/.config/sparky/client.json` stores only gateway, SSH, client p
 | Codex | Bifrost `/v1/responses`, generated model catalog, explicit context and compact threshold |
 | OpenCode | Per-process `OPENCODE_CONFIG_CONTENT`, `/v1`, live model metadata |
 
+OpenCode reads the selected model from `OPENCODE_CONFIG_CONTENT`. Sparky does
+not pass `--model` to OpenCode because the full-screen OpenCode 2 command
+rejects it. If OpenCode supports `--standalone`, Sparky uses a private server
+so each launch receives its model and gateway settings.
+
 The launcher preserves unrelated providers, credentials, MCP settings, permissions, and history. Hermes requires a narrow update to its existing Spark provider block. The launcher takes a private backup and preserves unrelated YAML values and comments. Other adapters use process settings or generated files. No adapter enables permission bypasses.
 
 Some clients require a nonempty API token field. Their fixed placeholder is not a gateway secret. Inference remains keyless through Tailscale. Administrative SSH keeps its existing checks. Sparky is not an access boundary for a process that already runs as the administrator.

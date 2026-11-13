@@ -212,12 +212,34 @@ func buildHarnessPlan(cfg clientConfig, catalog Object, model Object, harness, p
 			"small_model": selected,
 		}
 		env["OPENCODE_CONFIG_CONTENT"] = string(jsonBytes(raw))
-		args("--model", selected)
+		// The full-screen v2 command has no --model flag. Both versions
+		// read model from OPENCODE_CONFIG_CONTENT. V2 needs a private
+		// server so an existing background service cannot lose this env.
+		standalone, err := harnessOpenCodeStandalone(binary)
+		if err != nil {
+			return nil, err
+		}
+		if standalone {
+			args("--standalone")
+		}
 	default: // hermes
 		args("--provider", "spark-gateway", "--model", modelID)
 		env["HERMES_INFERENCE_MODEL"] = modelID
 	}
 	return plan, nil
+}
+
+// harnessOpenCodeStandalone checks the installed CLI, including custom binaries.
+func harnessOpenCodeStandalone(binary string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, "--help")
+	cmd.WaitDelay = time.Second
+	help, err := cmd.Output()
+	if err != nil {
+		return false, fail("Cannot read OpenCode launch options. Run opencode --help to check the installation.")
+	}
+	return strings.Contains(string(help), "--standalone"), nil
 }
 
 // clientResolveProject expands ~ and makes the project path absolute.
