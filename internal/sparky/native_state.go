@@ -592,6 +592,13 @@ func backendForRecipe(s Object, rec Object) string {
 // /v1/models. The durable state and generation are re-checked after the
 // probes, so a concurrent newer operation is never reported ready.
 func (r *Runtime) nativeReady(ctx context.Context, name string, m, s Object, nodes []string, placement string) bool {
+	return r.nativeReadyWithWorkerChecks(ctx, name, m, s, nodes, placement, true)
+}
+
+// Request admission uses the same record, supervisor, backend identity and
+// generation checks without opening SSH sessions to probe worker units.
+// The model supervisor retains those unit checks outside the request path.
+func (r *Runtime) nativeReadyWithWorkerChecks(ctx context.Context, name string, m, s Object, nodes []string, placement string, probeWorkers bool) bool {
 	rec, err := r.readRecord(name)
 	if err != nil {
 		return false
@@ -618,6 +625,9 @@ func (r *Runtime) nativeReady(ctx context.Context, name string, m, s Object, nod
 		return false
 	}
 	for node, v := range obj(rec["units"]) {
+		if node != "spark01" && !probeWorkers {
+			continue
+		}
 		ok, e := r.unitActive(ctx, node, str(v))
 		if e != nil || !ok {
 			return false

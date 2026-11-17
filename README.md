@@ -145,6 +145,12 @@ The controller runs as `sparky-controller.service` on Spark 1. In legacy mode, t
 
 The controller tracks node reservations for LLM requests and ComfyUI jobs. Conflicting work waits. Active LLM requests and active image jobs finish before a conflicting model is unloaded. Unknown activity prevents unloading. Idle ComfyUI caches can be released. Protected Parakeet containers stay loaded. These are software admission checks. They do not create a hardware GPU memory cap.
 
+In native mode, inference checks the saved model generation, controller-local
+supervisor state, backend health, and served model identity before and after
+capacity reservation. It does not open SSH connections to check worker units.
+The model supervisor monitors worker units outside the inference path. Explicit
+model loading and lifecycle operations retain their worker service checks.
+
 A ComfyUI custom node reserves the device for the full execution of each job. This also covers jobs submitted through the existing ComfyUI UI. Existing services, workflows, assets, and image outputs stay in place. The controller uses no kernel, driver, or global memory changes.
 
 ```sh

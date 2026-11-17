@@ -565,14 +565,14 @@ func (c *Coordinator) resolveAuto(ctx context.Context) (string, error) {
 		// a one-shot placement or a pending run_on change must never be
 		// reported ready on the desired nodes it does not run on.
 		sel, err := c.loadedSelection(name)
-		if err == nil && backendForRecipe(sel.Setting, sel.Record) != "" && c.runtime.ready(ctx, name, sel.Setting, sel.Nodes) {
+		if err == nil && backendForRecipe(sel.Setting, sel.Record) != "" && c.runtime.requestReady(ctx, name, sel.Setting, sel.Nodes) {
 			return name, nil
 		}
 	}
 	return "", fail("No automatic routing target is ready. Ask the human to switch the model. Do not load or unload models automatically.")
 }
 func (c *Coordinator) requireReady(ctx context.Context, name string, sel *runtimeSelection) error {
-	if sel == nil || !c.runtime.ready(ctx, name, sel.Setting, sel.Nodes) {
+	if sel == nil || !c.runtime.requestReady(ctx, name, sel.Setting, sel.Nodes) {
 		return fail("%s is not ready at the selected placement. Ask the human to switch the model. Do not load or unload models automatically.", name)
 	}
 	return nil

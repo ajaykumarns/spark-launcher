@@ -103,6 +103,19 @@ func (r *Runtime) loadedSelectionWith(cfg Object, name string) (*runtimeSelectio
 		Record: rec, Actual: true}, nil
 }
 
+// requestReady keeps native inference admission local to the controller and
+// backend HTTP endpoints. Load and lifecycle checks still use ready/nativeReady.
+func (r *Runtime) requestReady(ctx context.Context, name string, setting Object, nodes []string) bool {
+	if !r.native() {
+		return r.ready(ctx, name, setting, nodes)
+	}
+	sel, err := r.loadedSelection(name)
+	if err != nil || !sameStrings(sel.Nodes, nodes) {
+		return false
+	}
+	return r.nativeReadyWithWorkerChecks(ctx, name, sel.Model, sel.Setting, sel.Nodes, sel.Placement, false)
+}
+
 // ready resolves the placement and dispatches to the mode-specific check.
 // The native branch is the strong stage-1 readiness; the legacy branch keeps
 // its historical health-200 shortcut unchanged.
