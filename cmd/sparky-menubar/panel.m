@@ -67,6 +67,53 @@ static NSString *Str(const char *s) { return s ? [NSString stringWithUTF8String:
 }
 @end
 
+// Draw the symbols in the menu item's own view. The native menu can
+// snapshot that view without rendering its NSImageView descendants.
+@interface SparkyCapabilityRow : NSView
+@property (nonatomic, copy) NSArray<NSImage *> *images;
+@property (nonatomic, copy) NSArray<NSString *> *details;
+- (void)setImages:(NSArray<NSImage *> *)images details:(NSArray<NSString *> *)details;
+@end
+
+static NSRect CapabilityFrame(NSUInteger index) {
+    return NSMakeRect(18 + index * 29, 2, 19, 19);
+}
+
+@implementation SparkyCapabilityRow
+- (void)setImages:(NSArray<NSImage *> *)images details:(NSArray<NSString *> *)details {
+    self.images = images;
+    self.details = details;
+    [self removeAllToolTips];
+    for (NSUInteger i = 0; i < details.count; i++) {
+        [self addToolTipRect:CapabilityFrame(i) owner:self userData:(void *)(uintptr_t)i];
+    }
+    [self setAccessibilityElement:YES];
+    [self setAccessibilityRole:NSAccessibilityGroupRole];
+    [self setAccessibilityLabel:[details componentsJoinedByString:@", "]];
+    self.needsDisplay = YES;
+}
+- (NSString *)view:(NSView *)view stringForToolTip:(NSToolTipTag)tag
+              point:(NSPoint)point userData:(void *)data {
+    NSUInteger index = (uintptr_t)data;
+    return index < self.details.count ? self.details[index] : nil;
+}
+- (void)drawRect:(NSRect)dirtyRect {
+    for (NSUInteger i = 0; i < self.images.count; i++) {
+        NSRect frame = CapabilityFrame(i);
+        if (!NSIntersectsRect(frame, dirtyRect)) continue;
+        NSImage *image = self.images[i];
+        NSSize size = image.size;
+        if (size.width <= 0 || size.height <= 0) continue;
+        CGFloat scale = MIN(NSWidth(frame) / size.width, NSHeight(frame) / size.height);
+        NSSize drawn = NSMakeSize(size.width * scale, size.height * scale);
+        NSRect target = NSMakeRect(NSMidX(frame) - drawn.width / 2, NSMidY(frame) - drawn.height / 2,
+                                   drawn.width, drawn.height);
+        [image drawInRect:target fromRect:NSZeroRect operation:NSCompositingOperationSourceOver
+                 fraction:1 respectFlipped:YES hints:nil];
+    }
+}
+@end
+
 @interface SparkyMenuController : NSObject <NSMenuDelegate>
 @property (nonatomic, strong) NSMenu *menu;
 @property (nonatomic, strong) NSMenu *models;
@@ -80,7 +127,7 @@ static NSString *Str(const char *s) { return s ? [NSString stringWithUTF8String:
 @property (nonatomic, strong) NSMenuItem *catalogItem;
 @property (nonatomic, strong) NSMenuItem *locationItem;
 @property (nonatomic, strong) NSMenuItem *capabilitiesItem;
-@property (nonatomic, strong) NSView *capabilitiesRow;
+@property (nonatomic, strong) SparkyCapabilityRow *capabilitiesRow;
 @property (nonatomic, strong) NSArray<NSString *> *capabilityNames;
 @property (nonatomic, strong) NSArray<NSString *> *capabilityStates;
 @property (nonatomic, strong) SparkyInfoRow *model;
@@ -140,7 +187,7 @@ static NSMenuItem *Info(NSView *row) {
         self.models.delegate = self;
         self.extras = @[]; self.memoryLabels = @[]; self.memoryValues = @[];
         self.choiceLabels = @[]; self.choiceIDs = @[]; self.pickerCaption = @"Loading profiles…";
-        self.capabilitiesRow = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 300, 24)];
+        self.capabilitiesRow = [[SparkyCapabilityRow alloc] initWithFrame:NSMakeRect(0, 0, 300, 24)];
         self.capabilitiesRow.autoresizingMask = NSViewWidthSizable;
         self.model = [[SparkyInfoRow alloc] initSmall:NO strong:YES pair:NO];
         self.location = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
@@ -349,21 +396,22 @@ void sparky_set_capabilities(const char **names, const char **states, int count)
             @"images": @"photo",
             @"ocr": @"text.viewfinder"
         };
-        NSMutableArray *icons = [NSMutableArray array];
+        NSMutableArray *icons = [NSMutableArray array], *details = [NSMutableArray array];
         for (NSUInteger i = 0; i < labels.count; i++) {
             NSString *name = labels[i], *state = availability[i];
             NSString *displayName = [name isEqualToString:@"ocr"] ? @"OCR" : name.capitalizedString;
             NSString *detail = [NSString stringWithFormat:@"%@ · %@", displayName, state];
-            NSImageView *icon = [[NSImageView alloc] initWithFrame:NSMakeRect(18 + i * 29, 2, 19, 19)];
-            icon.image = [NSImage imageWithSystemSymbolName:(symbols[name] ?: @"circle") accessibilityDescription:detail];
-            icon.symbolConfiguration = [NSImageSymbolConfiguration configurationWithPointSize:15 weight:NSFontWeightMedium];
-            icon.contentTintColor = [state isEqualToString:@"available"] ? NSColor.labelColor :
-                ([state isEqualToString:@"partial"] ? NSColor.systemOrangeColor : NSColor.tertiaryLabelColor);
-            icon.toolTip = detail;
-            [icon setAccessibilityLabel:detail];
-            [icons addObject:icon];
+            NSColor *color = [state isEqualToString:@"available"] ? NSColor.labelColor :
+                ([state isEqualToString:@"partial"] ? NSColor.systemOrangeColor : NSColor.secondaryLabelColor);
+            NSImage *icon = [NSImage imageWithSystemSymbolName:(symbols[name] ?: @"circle")
+                                      accessibilityDescription:detail];
+            if (!icon) icon = [NSImage imageWithSystemSymbolName:@"circle" accessibilityDescription:detail];
+            NSImageSymbolConfiguration *size = [NSImageSymbolConfiguration configurationWithPointSize:15 weight:NSFontWeightMedium];
+            NSImageSymbolConfiguration *palette = [NSImageSymbolConfiguration configurationWithPaletteColors:@[color]];
+            [icons addObject:[icon imageWithSymbolConfiguration:[size configurationByApplyingConfiguration:palette]] ?: icon];
+            [details addObject:detail];
         }
-        c.capabilitiesRow.subviews = icons;
+        [c.capabilitiesRow setImages:icons details:details];
         c.capabilitiesItem.hidden = !icons.count;
     });
 }
@@ -442,9 +490,30 @@ char *sparky_probe_selected_profile(void) {
 int sparky_probe_capability_count(void) {
     SparkyMenuController *c = Controller();
     if (c.capabilitiesItem.hidden) return 0;
-    for (NSImageView *icon in c.capabilitiesRow.subviews)
-        if (!icon.image || !icon.toolTip.length) return -1;
-    return (int)c.capabilitiesRow.subviews.count;
+    SparkyCapabilityRow *row = c.capabilitiesRow;
+    NSRect bounds = row.bounds;
+    NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc]
+        initWithBitmapDataPlanes:NULL pixelsWide:NSWidth(bounds) pixelsHigh:NSHeight(bounds)
+        bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace
+        bytesPerRow:0 bitsPerPixel:0];
+    NSGraphicsContext *previous = NSGraphicsContext.currentContext;
+    NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap];
+    [NSColor.clearColor setFill];
+    NSRectFillUsingOperation(bounds, NSCompositingOperationCopy);
+    [row drawRect:bounds];
+    NSGraphicsContext.currentContext = previous;
+
+    int count = 0;
+    for (NSUInteger i = 0; i < row.details.count; i++) {
+        NSRect frame = CapabilityFrame(i);
+        BOOL drawn = NO;
+        for (NSInteger x = NSMinX(frame); x < NSMaxX(frame) && !drawn; x++) {
+            for (NSInteger y = 0; y < NSHeight(bounds) && !drawn; y++)
+                drawn = [bitmap colorAtX:x y:y].alphaComponent > 0.05;
+        }
+        if (drawn) count++;
+    }
+    return count;
 }
 char *sparky_probe_picker_caption(void) { return strdup(Controller().pickerCaption.UTF8String); }
 char *sparky_probe_layout(int picking) {
