@@ -80,7 +80,7 @@ var cliHarnessCommands = []string{"claude", "hermes", "codex", "opencode"}
 // cliCommandList is every top-level command word.
 var cliCommandList = append([]string{
 	"status", "models", "devices", "ocr", "plan", "load", "unload",
-	"image-profile", "config", "run", "sync", "logs", "doctor", "ui",
+	"profile", "image-profile", "config", "run", "sync", "logs", "doctor", "ui",
 	"update", "init", "admin", "node",
 }, cliHarnessCommands...)
 
@@ -139,6 +139,8 @@ var cliSpecs = map[string]*cliSpec{
 		flagChoices: map[string][]string{"--on": cliPlacements},
 		boolFlags:   []string{"--force"}},
 	"unload": {posMin: 1, posMax: 1, posNames: []string{"model"}, boolFlags: []string{"--force"}},
+	"profile": {posMin: 2, posMax: 2, posNames: []string{"action", "name"},
+		posChoices: map[int][]string{0: {"plan", "apply"}}},
 	"image-profile": {posMax: 1, posNames: []string{"mode"},
 		posChoices: map[int][]string{0: cliProfileModes},
 		boolFlags:  []string{"--dry-run"},
@@ -189,6 +191,7 @@ Commands:
   plan ACTION NAME Preview load/unload steps without changing services
   load NAME        Load a model after active work finishes (--on NODE for one load, --force cancels conflicts)
   unload NAME      Unload a model after its active work finishes
+  profile ACTION NAME  Preview or apply a cluster profile
   image-profile    Shared or dedicated image memory limits
   config ACTION    show [MODEL] | validate | placement MODEL ON
   run comfyui FILE Submit a ComfyUI API workflow JSON file

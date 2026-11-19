@@ -427,6 +427,8 @@ func cliRemoteResult(ctx context.Context, cfg clientConfig, action string, model
 // cliRemoteOperationTimeout returns the documented per-operation timeout.
 func cliRemoteOperationTimeout(operation string) time.Duration {
 	switch operation {
+	case "profile-apply":
+		return 7230 * time.Second
 	case "image-profile":
 		return 900 * time.Second
 	case "run":

@@ -134,7 +134,7 @@ func deviceQueryUnits(names []string) (Object, error) {
 	return units, nil
 }
 
-const deviceContainerTemplate = `{"name":{{json .Name}},"running":{{.State.Running}},"id":{{json .Id}},"started_at":{{json .State.StartedAt}},"oom_killed":{{.State.OOMKilled}}}`
+const deviceContainerTemplate = `{"name":{{json .Name}},"running":{{.State.Running}},"id":{{json .Id}},"started_at":{{json .State.StartedAt}},"oom_killed":{{.State.OOMKilled}},"health":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}}}`
 
 func deviceQueryContainers() (Object, error) {
 	ids, err := deviceRun([]string{"sudo", "-n", "docker", "ps", "-aq"}, deviceCommandTimeout)
@@ -238,9 +238,12 @@ func deviceProbeComfy(node Object) Object {
 	if err != nil {
 		return comfy
 	}
-	comfy["reachable"] = true
 	running := arr(queue["queue_running"])
 	pending := arr(queue["queue_pending"])
+	if running == nil || pending == nil {
+		return comfy
+	}
+	comfy["reachable"] = true
 	comfy["running"] = float64(len(running))
 	comfy["pending"] = float64(len(pending))
 	promptIDs := []any{}
@@ -255,6 +258,15 @@ func deviceProbeComfy(node Object) Object {
 	comfy["prompt_ids"] = promptIDs
 	if state, err := requestObject(context.Background(), "GET", strings.TrimSuffix(url, "/")+"/sparky/state", nil, nil, 3*time.Second, false); err == nil {
 		for key, value := range state {
+			switch key {
+			case "reachable":
+				continue
+			case "running", "pending":
+				// Work seen by either probe must count as busy.
+				if num(value) <= num(comfy[key]) {
+					continue
+				}
+			}
 			comfy[key] = value
 		}
 		comfy["guarded"] = true

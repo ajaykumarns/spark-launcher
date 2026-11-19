@@ -456,6 +456,12 @@ func (c *Coordinator) snapshot(ctx context.Context, fresh bool) (Object, error) 
 		data["decision_auto_routing"] = copyObject(c.decisionAutoPool)
 		c.mu.Unlock()
 	}
+	if profile := selectedProfile(c.cfg()); profile != nil {
+		if groups := arr(profile["capabilities"]); len(groups) > 0 {
+			profile["capabilities"] = c.runningProfileCapabilities(ctx, groups, data)
+		}
+		data["profile"] = profile
+	}
 	data["config_path"] = c.path
 	return data, nil
 }
@@ -723,7 +729,10 @@ func (c *Coordinator) loadInternal(ctx context.Context, requested, forceID strin
 	if err := c.refresh(); err != nil {
 		return nil, err
 	}
-	cfg := c.cfg()
+	return c.loadLocked(ctx, c.cfg(), requested, forceID, override, generation, false)
+}
+
+func (c *Coordinator) loadLocked(ctx context.Context, cfg Object, requested, forceID, override string, generation map[string]uint64, profile bool) (Object, error) {
 	name, m, err := resolveWorkload(cfg, requested)
 	if err != nil {
 		return nil, err
@@ -862,6 +871,9 @@ func (c *Coordinator) loadInternal(ctx context.Context, requested, forceID strin
 		if other != name && rt.native() && boolean(s["shared_device"]) && boolean(row["shared_device"]) && str(row["state"]) == StateReady {
 			continue
 		}
+		if profile {
+			return nil, fail("%s changed since the profile was planned. No additional model was stopped.", other)
+		}
 		if other == name && rt.native() && rt.adoptSelf(operationCtx, name, m, s, nodes, placement) {
 			// The model's own durable record already matches the selected
 			// recipe, placement, nodes and topology: adopt the SAME
@@ -976,7 +988,10 @@ func (c *Coordinator) unload(ctx context.Context, requested string, force bool) 
 	if err := c.refresh(); err != nil {
 		return nil, err
 	}
-	cfg := c.cfg()
+	return c.unloadLocked(ctx, c.cfg(), requested)
+}
+
+func (c *Coordinator) unloadLocked(ctx context.Context, cfg Object, requested string) (Object, error) {
 	name, m, err := resolveWorkload(cfg, requested)
 	recordNodes := []string(nil)
 	if err != nil {
@@ -1543,11 +1558,7 @@ func (c *Coordinator) submitComfyOrigin(workflow Object, on string) (string, Obj
 	if err := c.refresh(); err != nil {
 		return "", nil, err
 	}
-	cfg := c.cfg()
-	if on == "" {
-		on = str(obj(obj(cfg["models"])["comfyui"])["run_on"])
-	}
-	return c.submitComfyPinned(cfg, on, workflow)
+	return c.submitComfyPinned(c.cfg(), on, workflow)
 }
 
 // submitComfyPinned submits the workflow using exactly the caller-supplied
@@ -1557,6 +1568,31 @@ func (c *Coordinator) submitComfyOrigin(workflow Object, on string) (string, Obj
 func (c *Coordinator) submitComfyPinned(cfg Object, on string, workflow Object) (string, Object, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), comfyReadinessWait+2*time.Minute)
 	defer cancel()
+	if err := c.reconfigure.lock(ctx); err != nil {
+		return "", nil, err
+	}
+	defer c.reconfigure.unlock()
+	if err := c.refresh(); err != nil {
+		return "", nil, err
+	}
+	if compactJSON(cfg) != compactJSON(c.cfg()) {
+		return "", nil, fail("The cluster configuration changed while waiting. Retry the image request.")
+	}
+	profile := selectedProfile(cfg)
+	if str(profile["error"]) != "" {
+		return "", nil, fail("Cannot read the applied profile. No workflow was submitted.")
+	}
+	managed := profile != nil
+	if managed {
+		selected := profileServicePlacement(arr(profile["capabilities"]), "comfyui")
+		if selected == "" {
+			return "", nil, fail("The applied profile does not include ComfyUI.")
+		}
+		if on != "" && on != selected {
+			return "", nil, fail("The applied profile runs ComfyUI on %s.", selected)
+		}
+		on = selected
+	}
 	_, s, nodes, _, err := selectPlacement(cfg, "comfyui", on)
 	if err != nil {
 		return "", nil, err
@@ -1577,23 +1613,11 @@ func (c *Coordinator) submitComfyPinned(cfg Object, on string, workflow Object) 
 		return "", nil, e
 	}
 	if !boolean(obj(state["comfyui"])["reachable"]) {
-		if e := c.runtime.unit(ctx, node, "start", str(meta["comfy_unit"])); e != nil {
-			return "", nil, e
+		if managed {
+			return "", nil, fail("ComfyUI is not ready. Apply the profile again after checking the service.")
 		}
-		deadline := time.Now().Add(comfyReadinessWait)
-		for {
-			state, e := c.runtime.inspectNode(ctx, node)
-			if e == nil && boolean(obj(state["comfyui"])["reachable"]) {
-				break
-			}
-			if time.Now().After(deadline) {
-				return "", nil, fail("ComfyUI did not become ready in time.")
-			}
-			select {
-			case <-ctx.Done():
-				return "", nil, fail("ComfyUI did not become ready in time.")
-			case <-time.After(200 * time.Millisecond):
-			}
+		if err := c.runtime.startComfy(ctx, node); err != nil {
+			return "", nil, err
 		}
 	}
 	payload := workflow

@@ -441,15 +441,23 @@ func (r *Runtime) ensureAudio(ctx context.Context, name string) error {
 		return err
 	}
 	for _, node := range nodes {
-		args := append([]string{"sudo", "-n", "docker", "start"}, stringsOf(s["containers"])...)
-		if node != "spark01" {
-			args = []string{"ssh", str(obj(obj(r.config()["nodes"])[node])["ssh"]), shellJoin(args)}
-		}
-		if _, err := r.runChecked(ctx, args, nil, time.Minute); err != nil {
+		if _, err := r.audioDocker(ctx, node, append([]string{"start"}, stringsOf(s["containers"])...)...); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (r *Runtime) audioDocker(ctx context.Context, node string, cmd ...string) (string, error) {
+	args := append([]string{"sudo", "-n", "docker"}, cmd...)
+	if node != "spark01" {
+		host := str(obj(obj(r.config()["nodes"])[node])["ssh"])
+		if err := safeHost(host); err != nil {
+			return "", err
+		}
+		args = []string{"ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, shellJoin(args)}
+	}
+	return r.runChecked(ctx, args, nil, time.Minute)
 }
 func (r *Runtime) event(action string, fields Object) error {
 	entry := merge(fields, Object{"time": now(), "action": action})

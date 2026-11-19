@@ -139,6 +139,12 @@ node binary, and running controller together before using `load --on`. The node
 checks controller support before it sends the load command. It rejects an older
 controller that cannot apply the override.
 
+## Cluster profiles
+
+Use `sparky profile plan NAME` and `sparky profile apply NAME` to switch
+a set of models together. Sparky keeps ready models whose running recipe and
+placement already match. See [Cluster profiles](docs/profiles.md).
+
 ## Resource control
 
 The controller runs as `sparky-controller.service` on Spark 1. In legacy mode, the existing llama-swap manager handles explicit model loading and unloading (the native lifecycle has its own supervisor). Inference cannot start a stopped model. Idle unloading is disabled. Sparky derives its compatibility matrix from the central model placements. Nemotron on Spark 1 and Qwen on Spark 2 can run together. The two-device models require both nodes.
