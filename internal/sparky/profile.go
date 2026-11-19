@@ -21,8 +21,7 @@ type profileModel struct {
 type clusterProfile struct {
 	name     string
 	models   []profileModel
-	observe  Object
-	parakeet string
+	services Object
 }
 
 func readProfile(path, name string, cfg Object) (clusterProfile, error) {
@@ -77,42 +76,26 @@ func readProfile(path, name string, cfg Object) (clusterProfile, error) {
 		p.models = append(p.models, profileModel{canonical, on, nodes, m, s})
 	}
 
-	if services, ok := entry["observe"]; ok && !isObject(services) {
-		return p, fail("Profile %s observe must map service names to Sparks.", name)
+	if services, ok := entry["services"]; ok && !isObject(services) {
+		return p, fail("Profile %s services must map service names to Sparks.", name)
 	}
-	p.observe = obj(entry["observe"])
-	for _, service := range keys(p.observe) {
-		if service == "parakeet" {
-			return p, fail("List Parakeet under services to run it, or omit it to stop it.")
-		}
-		node := str(p.observe[service])
+	p.services = obj(entry["services"])
+	for _, service := range keys(p.services) {
+		node := str(p.services[service])
 		if node != "spark01" && node != "spark02" {
-			return p, fail("Give observed service %s an explicit single Spark.", service)
+			return p, fail("Give service %s an explicit single Spark.", service)
 		}
 		if service == "spark-ocr" && node == "spark01" {
 			continue
 		}
 		m, _, _, _, err := selectPlacement(cfg, service, node)
 		if err != nil || !contains([]string{"audio", "comfyui"}, str(m["kind"])) {
-			return p, fail("No observable service %s is configured on %s.", service, node)
+			return p, fail("No installed profile service %s on %s.", service, node)
 		}
 	}
-	if services, ok := entry["services"]; ok && !isObject(services) {
-		return p, fail("Profile %s services must map service names to Sparks.", name)
-	}
-	for service, raw := range obj(entry["services"]) {
-		if service != "parakeet" {
-			return p, fail("Only Parakeet supports profile start and stop. Use observe for %s.", service)
-		}
-		p.parakeet = str(raw)
-		if !contains([]string{"spark01", "spark02"}, p.parakeet) {
-			return p, fail("Give Parakeet an explicit single Spark.")
-		}
-	}
-
 	for _, field := range keys(entry) {
-		if field != "models" && field != "services" && field != "observe" {
-			return p, fail("Unknown profile field %s.", field)
+		if field != "models" && field != "services" {
+			return p, fail("Unknown profile field %s. Use services for AI workloads.", field)
 		}
 	}
 	return p, nil
@@ -147,16 +130,12 @@ func planProfile(cfg Object, p clusterProfile, snapshot Object, ready func(profi
 	}
 
 	released := []string{}
-	audioStop, audioStart, audioKeep, audioBlock := planProfileParakeet(cfg, snapshot, p.parakeet)
-	if audioBlock != "" {
-		blockers = append(blockers, audioBlock)
-	}
-	for _, step := range audioStop {
-		steps = append(steps, step)
-		released = unionNodes(released, stringsOf(step["nodes"]))
-	}
-	if audioKeep != nil {
-		kept = append(kept, audioKeep)
+	services := planProfileServices(cfg, p, snapshot)
+	steps = append(steps, services.stop...)
+	kept = append(kept, services.keep...)
+	blockers = append(blockers, services.blockers...)
+	for _, raw := range services.stop {
+		released = unionNodes(released, stringsOf(obj(raw)["nodes"]))
 	}
 	for _, name := range keys(running) {
 		row := obj(running[name])
@@ -197,24 +176,7 @@ func planProfile(cfg Object, p clusterProfile, snapshot Object, ready func(profi
 		started = unionNodes(started, target.nodes)
 	}
 
-	if audioStart != nil {
-		steps = append(steps, audioStart)
-	}
-
-	for _, name := range keys(p.observe) {
-		node := str(p.observe[name])
-		row := obj(running[name])
-		ok := boolean(row["loaded"]) && contains(stringsOf(row["nodes"]), node)
-		if name == "spark-ocr" {
-			nodeStatus := obj(obj(snapshot["nodes"])[node])
-			ok = boolean(obj(obj(nodeStatus["containers"])[name])["running"])
-		}
-		if ok {
-			kept = append(kept, profileStep("observe", name, []string{node}))
-		} else {
-			blockers = append(blockers, fmt.Sprintf("Observed service %s is not running on %s.", name, node))
-		}
-	}
+	steps = append(steps, services.start...)
 
 	routes := Object{}
 	for _, route := range []struct{ key, alias string }{{"auto", "spark-auto"}, {"decision_auto", "spark-decision/auto"}} {
@@ -265,6 +227,18 @@ func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
 		if err != nil {
 			return nil, err
 		}
+		if str(p.services["spark-ocr"]) == "spark01" {
+			ocr, err := newOCRService(c.runtime.root())
+			if err != nil {
+				return nil, err
+			}
+			source, err := ocr.ocrSource()
+			if err != nil {
+				return nil, err
+			}
+			snapshot["ocr_installed"] = ocrFileExists(filepath.Join(source, "deploy", "compose.yaml")) &&
+				ocrFileExists(ocr.ocrEnvFile(source))
+		}
 		return planProfile(cfg, p, snapshot, func(m profileModel) bool {
 			return c.runtime.nativeReady(ctx, m.name, m.model, m.recipe, m.nodes, m.placement)
 		}), nil
@@ -299,13 +273,15 @@ func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
 		}
 		step := obj(v)
 		model := str(step["workload"])
-		modelChanged = modelChanged || model != "parakeet"
-		if model == "parakeet" {
-			err = c.runtime.applyProfileParakeet(ctx, step)
-		} else if str(step["action"]) == "stop" {
-			_, err = c.unloadLocked(ctx, model)
+		if kind := str(step["service_kind"]); kind != "" {
+			err = c.applyProfileService(ctx, kind, step)
 		} else {
-			_, err = c.loadLocked(ctx, model, "", str(step["on"]), c.generationCopy(), true)
+			modelChanged = true
+			if str(step["action"]) == "stop" {
+				_, err = c.unloadLocked(ctx, model)
+			} else {
+				_, err = c.loadLocked(ctx, model, "", str(step["on"]), c.generationCopy(), true)
+			}
 		}
 		if err != nil {
 			return failed(err)
@@ -330,7 +306,7 @@ func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
 			return failed(err)
 		}
 	}
-	if err := writeObject(profileStatePath(cfg), Object{"name": name, "applied_at": time.Now().UTC()}); err != nil {
+	if err := writeObject(profileStatePath(cfg), Object{"name": name, "applied_at": time.Now().UTC(), "services": p.services}); err != nil {
 		return failed(fail("Could not save the selected profile: %v", err))
 	}
 	result["status"], result["completed"] = "applied", completed

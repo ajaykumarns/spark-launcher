@@ -1557,11 +1557,7 @@ func (c *Coordinator) submitComfyOrigin(workflow Object, on string) (string, Obj
 	if err := c.refresh(); err != nil {
 		return "", nil, err
 	}
-	cfg := c.cfg()
-	if on == "" {
-		on = str(obj(obj(cfg["models"])["comfyui"])["run_on"])
-	}
-	return c.submitComfyPinned(cfg, on, workflow)
+	return c.submitComfyPinned(c.cfg(), on, workflow)
 }
 
 // submitComfyPinned submits the workflow using exactly the caller-supplied
@@ -1571,6 +1567,25 @@ func (c *Coordinator) submitComfyOrigin(workflow Object, on string) (string, Obj
 func (c *Coordinator) submitComfyPinned(cfg Object, on string, workflow Object) (string, Object, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), comfyReadinessWait+2*time.Minute)
 	defer cancel()
+	if err := c.reconfigure.lock(ctx); err != nil {
+		return "", nil, err
+	}
+	defer c.reconfigure.unlock()
+	profile := selectedProfile(cfg)
+	if str(profile["error"]) != "" {
+		return "", nil, fail("Cannot read the applied profile. No workflow was submitted.")
+	}
+	services, managed := profile["services"]
+	if managed {
+		selected := str(obj(services)["comfyui"])
+		if selected == "" {
+			return "", nil, fail("The applied profile does not include ComfyUI.")
+		}
+		if on != "" && on != selected {
+			return "", nil, fail("The applied profile runs ComfyUI on %s.", selected)
+		}
+		on = selected
+	}
 	_, s, nodes, _, err := selectPlacement(cfg, "comfyui", on)
 	if err != nil {
 		return "", nil, err
@@ -1591,23 +1606,11 @@ func (c *Coordinator) submitComfyPinned(cfg Object, on string, workflow Object) 
 		return "", nil, e
 	}
 	if !boolean(obj(state["comfyui"])["reachable"]) {
-		if e := c.runtime.unit(ctx, node, "start", str(meta["comfy_unit"])); e != nil {
-			return "", nil, e
+		if managed {
+			return "", nil, fail("ComfyUI is not ready. Apply the profile again after checking the service.")
 		}
-		deadline := time.Now().Add(comfyReadinessWait)
-		for {
-			state, e := c.runtime.inspectNode(ctx, node)
-			if e == nil && boolean(obj(state["comfyui"])["reachable"]) {
-				break
-			}
-			if time.Now().After(deadline) {
-				return "", nil, fail("ComfyUI did not become ready in time.")
-			}
-			select {
-			case <-ctx.Done():
-				return "", nil, fail("ComfyUI did not become ready in time.")
-			case <-time.After(200 * time.Millisecond):
-			}
+		if err := c.runtime.startComfy(ctx, node); err != nil {
+			return "", nil, err
 		}
 	}
 	payload := workflow

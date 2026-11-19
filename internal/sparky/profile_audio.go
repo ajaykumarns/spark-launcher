@@ -8,48 +8,36 @@ import (
 	"time"
 )
 
-// The profile owns Parakeet membership. Its installed Docker recipes still
-// define where the service can run and which containers belong to it.
-func planProfileParakeet(cfg, snapshot Object, want string) (stops []Object, start, keep Object, blocker string) {
-	model := obj(obj(cfg["models"])["parakeet"])
-	settings := obj(model["settings"])
-	if want != "" {
-		_, _, _, _, err := selectPlacement(cfg, "parakeet", want)
-		if err != nil || str(model["kind"]) != "audio" {
-			return nil, nil, nil, fmt.Sprintf("Parakeet has no installed audio recipe on %s.", want)
-		}
-	}
-	if len(settings) == 0 || str(model["kind"]) != "audio" {
-		return nil, nil, nil, ""
-	}
+// Audio containers keep their catalog placement and dependency order.
+func planProfileAudio(name string, settings, snapshot Object, want string) (stops []Object, start, keep Object, blocker string) {
 	for _, node := range keys(settings) {
 		recipe := obj(settings[node])
 		names := stringsOf(recipe["containers"])
 		inventory := obj(obj(obj(snapshot["nodes"])[node])["containers"])
 		var running, stopped []string
-		for _, name := range names {
-			state, known := obj(inventory[name])["running"].(bool)
+		for _, container := range names {
+			state, known := obj(inventory[container])["running"].(bool)
 			switch {
 			case known && state:
-				running = append(running, name)
+				running = append(running, container)
 			case known:
-				stopped = append(stopped, name)
+				stopped = append(stopped, container)
 			case want == node:
-				return nil, nil, nil, fmt.Sprintf("Parakeet container %s was not found on %s.", name, node)
-			case inventory[name] != nil:
-				return nil, nil, nil, fmt.Sprintf("Cannot determine the state of %s on %s.", name, node)
+				return nil, nil, nil, fmt.Sprintf("%s container %s was not found on %s.", name, container, node)
+			case inventory[container] != nil:
+				return nil, nil, nil, fmt.Sprintf("Cannot determine the state of %s on %s.", container, node)
 			}
 		}
 		if want == node {
 			if len(stopped) == 0 {
-				keep = profileStep("keep", "parakeet", []string{node})
+				keep = profileStep("keep", name, []string{node})
 			} else {
-				start = profileStep("start", "parakeet", []string{node})
+				start = profileStep("start", name, []string{node})
 				start["containers"] = anyStrings(stopped)
 			}
 		} else if len(running) > 0 {
 			slices.Reverse(running)
-			step := profileStep("stop", "parakeet", []string{node})
+			step := profileStep("stop", name, []string{node})
 			step["containers"] = anyStrings(running)
 			stops = append(stops, step)
 		}
@@ -57,7 +45,7 @@ func planProfileParakeet(cfg, snapshot Object, want string) (stops []Object, sta
 	return stops, start, keep, ""
 }
 
-func (r *Runtime) applyProfileParakeet(ctx context.Context, step Object) error {
+func (r *Runtime) applyProfileAudio(ctx context.Context, step Object) error {
 	node := stringsOf(step["nodes"])[0]
 	start := str(step["action"]) == "start"
 	for _, container := range stringsOf(step["containers"]) {

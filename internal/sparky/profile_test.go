@@ -125,10 +125,13 @@ profiles:
     models:
       - glm: spark01
     services:
+      comfyui: spark02
       parakeet: spark02
   without-audio:
     models:
       - glm: spark01
+    services:
+      comfyui: spark02
 `
 	if err := os.WriteFile(filepath.Join(filepath.Dir(env.path), "profiles.yaml"), []byte(content), 0600); err != nil {
 		t.Fatal(err)
@@ -205,5 +208,122 @@ profiles:
 	}
 	if _, err := env.coord.Unload("parakeet", false); err == nil {
 		t.Fatal("profile membership must not remove protection from a direct unload")
+	}
+}
+
+func TestProfileSwitchesComfyAndOCR(t *testing.T) {
+	env := newImageEnv(t, "native")
+	ocrInstalled(t, env.root)
+	ocrSetHealth(t, Object{"service": "spark-ocr"}, nil)
+	var ocrRunning, comfyRunning, imageBusy bool
+	var changes []string
+	ocrSetStub(t, func(args []string) (CommandResult, error) {
+		switch {
+		case len(args) > 5 && args[4] == "docker" && args[5] == "compose":
+			ocrRunning = true
+			changes = append(changes, "start OCR")
+		case len(args) > 3 && args[2] == "docker" && args[3] == "stop":
+			ocrRunning = false
+			changes = append(changes, "stop OCR")
+		case len(args) > 3 && args[2] == "docker" && args[3] == "inspect":
+			if ocrRunning {
+				return CommandResult{Out: ocrInspectOK}, nil
+			}
+			return CommandResult{Out: `{"status":"exited","running":false}`}, nil
+		default:
+			t.Fatalf("unexpected OCR command: %v", args)
+		}
+		return CommandResult{}, nil
+	})
+	localProbe := env.rt.ProbeNode
+	env.rt.ProbeNode = func(meta Object) (Object, error) {
+		state, err := localProbe(meta)
+		state["containers"] = Object{
+			"spark-ocr":      Object{"running": ocrRunning},
+			"garuda-gateway": Object{"running": true},
+		}
+		return state, err
+	}
+	run := env.rt.Run
+	env.rt.Run = func(ctx context.Context, args []string, input []byte) (CommandResult, error) {
+		cmd := args[len(args)-1]
+		if args[0] != "ssh" {
+			return run(ctx, args, input)
+		}
+		switch cmd {
+		case shellJoin([]string{"sudo", "-n", "systemctl", "start", "comfyui.service"}):
+			comfyRunning = true
+			changes = append(changes, "start ComfyUI")
+		case shellJoin([]string{"sudo", "-n", "systemctl", "stop", "comfyui.service"}):
+			comfyRunning = false
+			changes = append(changes, "stop ComfyUI")
+		default:
+			if !strings.Contains(cmd, "node probe") {
+				return run(ctx, args, input)
+			}
+			state, err := env.dev.probe(nil)
+			pending := 0
+			if imageBusy {
+				pending = 1
+			}
+			state["comfyui"] = Object{"reachable": comfyRunning, "running": 0, "pending": pending}
+			unitState := "inactive"
+			if comfyRunning {
+				unitState = "active"
+			}
+			obj(state["units"])["comfyui.service"] = unitState
+			return CommandResult{Out: string(jsonBytes(state))}, err
+		}
+		return CommandResult{}, nil
+	}
+
+	profiles := `version: 1
+profiles:
+  media:
+    models: []
+    services:
+      comfyui: spark02
+      spark-ocr: spark01
+  empty:
+    models: []
+`
+	if err := os.WriteFile(filepath.Join(filepath.Dir(env.path), "profiles.yaml"), []byte(profiles), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := env.coord.Profile("media", true); err != nil || str(result["status"]) != "applied" {
+		t.Fatalf("start services: %v, %v", result, err)
+	}
+	imageBusy = true
+	if result, err := env.coord.Profile("empty", true); err != nil || !boolean(result["blocked"]) || len(changes) != 2 {
+		t.Fatalf("busy ComfyUI must block before stopping any service: %v, %v", result, err)
+	}
+	imageBusy = false
+	if result, err := env.coord.Profile("empty", true); err != nil || str(result["status"]) != "applied" {
+		t.Fatalf("stop services: %v, %v", result, err)
+	}
+	if _, err := env.coord.SubmitComfy(Object{"prompt": Object{}}, ""); err == nil || !strings.Contains(err.Error(), "does not include ComfyUI") {
+		t.Fatalf("an image request must not start an omitted service: %v", err)
+	}
+	if want := []string{"start ComfyUI", "start OCR", "stop ComfyUI", "stop OCR"}; !slices.Equal(changes, want) {
+		t.Fatalf("unexpected service changes: %v", changes)
+	}
+}
+
+func TestProfilePlansKokoroLikeOtherAudioServices(t *testing.T) {
+	cfg := Object{"models": Object{"kokoro": Object{
+		"kind": "audio", "settings": Object{"spark01": Object{"containers": []any{"garuda-kokoro-tts"}}},
+	}}}
+	state := Object{"running": true}
+	snapshot := Object{"nodes": Object{"spark01": Object{"containers": Object{"garuda-kokoro-tts": state}}}}
+	p := clusterProfile{services: Object{"kokoro": "spark01"}}
+	if plan := planProfileServices(cfg, p, snapshot); len(plan.keep) != 1 || len(plan.start)+len(plan.stop) != 0 {
+		t.Fatalf("running Kokoro must be kept: %+v", plan)
+	}
+	if plan := planProfileServices(cfg, clusterProfile{}, snapshot); len(plan.stop) != 1 || len(plan.start) != 0 {
+		t.Fatalf("omitted Kokoro must be stopped: %+v", plan)
+	}
+	state["running"] = false
+	if plan := planProfileServices(cfg, p, snapshot); len(plan.start) != 1 || len(plan.stop) != 0 {
+		t.Fatalf("selected stopped Kokoro must be started: %+v", plan)
 	}
 }

@@ -15,7 +15,10 @@ profiles:
       - glm: both
       - knowline: spark01
     services:
+      comfyui: spark02
+      kokoro: spark01
       parakeet: spark02
+      spark-ocr: spark01
 ```
 
 Use `sparky profile plan chat-and-decisions` to preview the switch. Use
@@ -38,16 +41,21 @@ the last successfully applied profile name. Review the live state and plan
 again after a failure. Sparky does not automatically restart the prior set
 of models or apply a profile at boot.
 
-`services` controls Parakeet. Include it to start its installed containers or
-keep them running. Omit it to stop the containers. The profile stops the
-gateway before the engine and starts the engine before the gateway. Profile
-apply can stop Parakeet even when the catalog protects it from direct unload.
-Sparky gives containers 30 seconds to stop. Audio requests do not use the
-language model drain mechanism.
+`services` controls installed audio services, ComfyUI, and Spark01 OCR.
+List a service to start it or keep it running. Omit it to stop it. Profiles
+use the installed recipes and do not install services. The gateway,
+inference proxy, and Sparky controller run independently of profiles.
 
-`observe` lists services that must already be running. It checks Kokoro,
-ComfyUI, and Spark01 OCR. These services keep their existing lifecycle
-controls. The plan reports
-expected chat and decision auto targets using the current Bifrost routing
-policy. Existing route reconciliation uses live model readiness.
-`sparky status` reports the last applied profile and the actual running state.
+Sparky refuses to stop ComfyUI while it has active or queued jobs. Image
+requests use the engine selected by the applied profile. They cannot start
+an engine the profile leaves stopped. Image checkpoints still load per
+workflow. Profile apply does not change the image engine memory limits.
+
+Audio containers start in recipe order and stop in reverse order.
+OCR uses the existing OCR controls. Stop operations can interrupt active
+audio or OCR requests. Profile apply does not change system boot policies.
+
+The plan reports expected chat and decision auto targets using the current
+Bifrost routing policy. Existing route reconciliation uses live model
+readiness. `sparky status` reports the last applied profile and actual running
+state.
