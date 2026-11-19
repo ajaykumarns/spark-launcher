@@ -3,10 +3,13 @@ package sparky
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type profileModel struct {
@@ -26,9 +29,19 @@ func readProfile(path, name string, cfg Object) (clusterProfile, error) {
 	if !simpleName.MatchString(name) {
 		return p, fail("Choose a profile name with letters, digits, dots, hyphens, or underscores.")
 	}
-	file, err := readObject(path)
+	source, err := os.Open(path)
 	if err != nil {
 		return p, fail("Read cluster profiles from %s: %v", path, err)
+	}
+	defer source.Close()
+	decoder := yaml.NewDecoder(source)
+	var file Object
+	if err := decoder.Decode(&file); err != nil {
+		return p, fail("Invalid profile YAML in %s: %v", path, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return p, fail("Expected one YAML document in %s.", path)
 	}
 	if num(file["version"]) != 1 || !isObject(file["profiles"]) || len(file) != 2 {
 		return p, fail("Expected a version 1 profiles file.")
@@ -43,10 +56,11 @@ func readProfile(path, name string, cfg Object) (clusterProfile, error) {
 	seen := map[string]bool{}
 	for _, v := range arr(entry["models"]) {
 		row := obj(v)
-		id, on := str(row["model"]), str(row["on"])
-		if len(row) != 2 || id == "" || placements[on] == nil {
-			return p, fail("Each model in %s needs a model name and explicit placement.", name)
+		names := keys(row)
+		if len(names) != 1 || placements[str(row[names[0]])] == nil {
+			return p, fail("Each model in %s must use 'model: placement', for example 'glm: both'.", name)
 		}
+		id, on := names[0], str(row[names[0]])
 		canonical, _, err := resolveWorkload(cfg, id)
 		if err != nil {
 			return p, err
@@ -210,7 +224,7 @@ func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
 	if !c.runtime.native() {
 		return nil, fail("Cluster profiles require the native model lifecycle.")
 	}
-	p, err := readProfile(filepath.Join(filepath.Dir(c.path), "profiles.json"), name, cfg)
+	p, err := readProfile(filepath.Join(filepath.Dir(c.path), "profiles.yaml"), name, cfg)
 	if err != nil {
 		return nil, err
 	}

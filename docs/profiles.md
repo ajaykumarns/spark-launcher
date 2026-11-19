@@ -4,22 +4,18 @@ A cluster profile lists the language and decision models that should run
 together. Give each model an explicit placement. The model catalog in
 `models.json` still defines the installed recipes and supported placements.
 
-Store profiles in `config/profiles.json` beside `models.json` on the head Spark.
+Store profiles in `config/profiles.yaml` beside `models.json` on the head Spark.
 For example:
 
-```json
-{
-  "version": 1,
-  "profiles": {
-    "chat-and-decisions": {
-      "models": [
-        {"model": "glm", "on": "both"},
-        {"model": "knowline", "on": "spark01"}
-      ],
-      "observe": {"parakeet": "spark02"}
-    }
-  }
-}
+```yaml
+version: 1
+profiles:
+  chat-and-decisions:
+    models:
+      - glm: both
+      - knowline: spark01
+    observe:
+      parakeet: spark02
 ```
 
 Use `sparky profile plan chat-and-decisions` to preview the switch. Use

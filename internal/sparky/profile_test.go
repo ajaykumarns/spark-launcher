@@ -16,12 +16,12 @@ func TestProfileApplyNativeLifecycle(t *testing.T) {
 	t.Cleanup(func() { nativeMonitorInterval = oldInterval })
 	t.Cleanup(env.joinSupervisor)
 
-	path := filepath.Join(filepath.Dir(env.path), "profiles.json")
-	if err := writeObject(path, Object{"version": 1, "profiles": Object{
-		"single": Object{"models": []any{Object{"model": integrationModel, "on": "spark01"}}},
-		"dual":   Object{"models": []any{Object{"model": integrationModel, "on": "both"}}},
-		"empty":  Object{"models": []any{}},
-	}}); err != nil {
+	path := filepath.Join(filepath.Dir(env.path), "profiles.yaml")
+	yaml := "version: 1\nprofiles:\n" +
+		"  single:\n    models:\n      - " + integrationModel + ": spark01\n" +
+		"  dual:\n    models:\n      - " + integrationModel + ": both\n" +
+		"  empty:\n    models: []\n"
+	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
 		t.Fatal(err)
 	}
 
