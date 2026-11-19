@@ -1111,6 +1111,9 @@ func formatStatus(data Object, width int, color bool) string {
 		table([]string{"DEVICE", "IN USE", "AVAILABLE RAM", "TOTAL RAM"}, deviceRows, "Device memory", width, color), ""}
 	if profile := obj(data["profile"]); str(profile["name"]) != "" {
 		lines = append(lines, note("Last applied profile: "+str(profile["name"])+".", "dim", color, width))
+		if groups := arr(profile["capabilities"]); len(groups) > 0 {
+			lines = append(lines, "Capabilities now", strings.TrimRight(profileCapabilitySummary(groups), "\n"), "")
+		}
 	} else if str(profile["error"]) != "" {
 		lines = append(lines, note(str(profile["error"]), "bright_yellow", color, width))
 	}

@@ -19,9 +19,10 @@ type profileModel struct {
 }
 
 type clusterProfile struct {
-	name     string
-	models   []profileModel
-	services Object
+	name         string
+	models       []profileModel
+	services     Object
+	capabilities []any
 }
 
 func readProfile(path, name string, cfg Object) (clusterProfile, error) {
@@ -35,7 +36,13 @@ func readProfile(path, name string, cfg Object) (clusterProfile, error) {
 	}
 	defer source.Close()
 	decoder := yaml.NewDecoder(source)
-	var file Object
+	decoder.KnownFields(true)
+	var file struct {
+		Version  int `yaml:"version"`
+		Profiles map[string]struct {
+			Capabilities yaml.Node `yaml:"capabilities"`
+		} `yaml:"profiles"`
+	}
 	if err := decoder.Decode(&file); err != nil {
 		return p, fail("Invalid profile YAML in %s: %v", path, err)
 	}
@@ -43,62 +50,140 @@ func readProfile(path, name string, cfg Object) (clusterProfile, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return p, fail("Expected one YAML document in %s.", path)
 	}
-	if num(file["version"]) != 1 || !isObject(file["profiles"]) || len(file) != 2 {
+	if file.Version != 1 || file.Profiles == nil {
 		return p, fail("Expected a version 1 profiles file.")
 	}
-	entry := obj(obj(file["profiles"])[name])
-	if entry == nil {
-		return p, fail("Unknown profile %s. Available profiles: %s", name, strings.Join(keys(obj(file["profiles"])), ", "))
+	entry, ok := file.Profiles[name]
+	if !ok {
+		names := make(Object, len(file.Profiles))
+		for n := range file.Profiles {
+			names[n] = true
+		}
+		return p, fail("Unknown profile %s. Available profiles: %s", name, strings.Join(keys(names), ", "))
 	}
-	if _, ok := entry["models"].([]any); !ok {
-		return p, fail("Profile %s must list its models, even if the list is empty.", name)
+	groups := entry.Capabilities
+	if groups.Kind != yaml.MappingNode {
+		return p, fail("Profile %s must define capabilities. Use capabilities: {} for an empty profile.", name)
 	}
-	seen := map[string]bool{}
-	for _, v := range arr(entry["models"]) {
-		row := obj(v)
-		names := keys(row)
-		if len(names) != 1 || placements[str(row[names[0]])] == nil {
-			return p, fail("Each model in %s must use 'model: placement', for example 'glm: both'.", name)
+	p.services = Object{}
+	p.capabilities = []any{}
+	seen, seenGroups := map[string]bool{}, map[string]bool{}
+	for i := 0; i < len(groups.Content); i += 2 {
+		group, list := groups.Content[i].Value, groups.Content[i+1]
+		if !contains([]string{"chat", "decisions", "transcription", "speech", "images", "ocr"}, group) || seenGroups[group] {
+			return p, fail("Unknown or repeated profile capability %s.", group)
 		}
-		id, on := names[0], str(row[names[0]])
-		canonical, _, err := resolveWorkload(cfg, id)
-		if err != nil {
-			return p, err
+		seenGroups[group] = true
+		if list.Kind != yaml.SequenceNode || len(list.Content) == 0 {
+			return p, fail("List at least one workload for %s, or omit the capability.", group)
 		}
-		m, s, nodes, _, err := selectPlacement(cfg, canonical, on)
-		if err != nil {
-			return p, err
+		providers := []any{}
+		for _, item := range list.Content {
+			if item.Kind != yaml.MappingNode || len(item.Content) != 2 {
+				return p, fail("Each %s workload must use 'workload: placement'.", group)
+			}
+			id, on := item.Content[0].Value, item.Content[1].Value
+			if placements[on] == nil {
+				return p, fail("Give %s an explicit supported placement.", id)
+			}
+			var m, s Object
+			var nodes []string
+			canonical := id
+			if id == "spark-ocr" && on == "spark01" {
+				nodes = []string{on}
+			} else {
+				var err error
+				canonical, _, err = resolveWorkload(cfg, id)
+				if err != nil {
+					return p, err
+				}
+				m, s, nodes, _, err = selectPlacement(cfg, canonical, on)
+				if err != nil {
+					return p, err
+				}
+			}
+			if profileCapability(canonical, m) != group {
+				return p, fail("%s does not provide the %s capability.", id, group)
+			}
+			if seen[canonical] {
+				return p, fail("List %s only once in profile %s.", id, name)
+			}
+			seen[canonical] = true
+			if str(m["kind"]) == "llm" {
+				p.models = append(p.models, profileModel{canonical, on, nodes, m, s})
+			} else {
+				if len(nodes) != 1 {
+					return p, fail("Give service %s an explicit single Spark.", id)
+				}
+				p.services[canonical] = on
+			}
+			providers = append(providers, Object{"workload": canonical, "nodes": anyStrings(nodes)})
 		}
-		if str(m["kind"]) != "llm" || seen[canonical] {
-			return p, fail("Profile %s needs distinct language or decision models. Check %s.", name, id)
-		}
-		seen[canonical] = true
-		p.models = append(p.models, profileModel{canonical, on, nodes, m, s})
-	}
-
-	if services, ok := entry["services"]; ok && !isObject(services) {
-		return p, fail("Profile %s services must map service names to Sparks.", name)
-	}
-	p.services = obj(entry["services"])
-	for _, service := range keys(p.services) {
-		node := str(p.services[service])
-		if node != "spark01" && node != "spark02" {
-			return p, fail("Give service %s an explicit single Spark.", service)
-		}
-		if service == "spark-ocr" && node == "spark01" {
-			continue
-		}
-		m, _, _, _, err := selectPlacement(cfg, service, node)
-		if err != nil || !contains([]string{"audio", "comfyui"}, str(m["kind"])) {
-			return p, fail("No installed profile service %s on %s.", service, node)
-		}
-	}
-	for _, field := range keys(entry) {
-		if field != "models" && field != "services" {
-			return p, fail("Unknown profile field %s. Use services for AI workloads.", field)
-		}
+		p.capabilities = append(p.capabilities, Object{"name": group, "providers": providers})
 	}
 	return p, nil
+}
+
+func profileCapability(name string, model Object) string {
+	if name == "spark-ocr" {
+		return "ocr"
+	}
+	switch str(model["kind"]) {
+	case "llm":
+		if str(model["api_kind"]) == "decision" {
+			return "decisions"
+		}
+		return "chat"
+	case "audio":
+		if len(obj(model["tts"])) > 0 {
+			return "speech"
+		}
+		return "transcription"
+	case "comfyui":
+		return "images"
+	}
+	return ""
+}
+
+// Capabilities describe the requested providers. Report readiness separately
+// so that a planned service or a stopped provider cannot look available.
+func profileAvailability(groups []any, ready func(Object) bool) []any {
+	out := []any{}
+	for _, raw := range groups {
+		group := obj(raw)
+		providers := []any{}
+		count := 0
+		for _, rawProvider := range arr(group["providers"]) {
+			provider := copyObject(obj(rawProvider))
+			available := ready(provider)
+			provider["ready"] = available
+			if available {
+				count++
+			}
+			providers = append(providers, provider)
+		}
+		state := "unavailable"
+		if count > 0 {
+			state = "available"
+			if count != len(providers) {
+				state = "partial"
+			}
+		}
+		out = append(out, Object{"name": group["name"], "providers": providers, "state": state})
+	}
+	return out
+}
+
+func profilePlansAvailability(p clusterProfile, kept []any) []any {
+	return profileAvailability(p.capabilities, func(provider Object) bool {
+		for _, raw := range kept {
+			step := obj(raw)
+			if step["workload"] == provider["workload"] && sameStrings(stringsOf(step["nodes"]), stringsOf(provider["nodes"])) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func profileStep(action, name string, nodes []string) Object {
@@ -192,7 +277,8 @@ func planProfile(cfg Object, p clusterProfile, snapshot Object, ready func(profi
 		routes[route.alias] = eligible
 	}
 	return Object{"profile": p.name, "status": "planned", "kept": kept, "steps": steps,
-		"blockers": blockers, "blocked": len(blockers) > 0, "expected_routes": routes}
+		"blockers": blockers, "blocked": len(blockers) > 0, "expected_routes": routes,
+		"capabilities": profilePlansAvailability(p, kept)}
 }
 
 func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
@@ -306,10 +392,11 @@ func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
 			return failed(err)
 		}
 	}
-	if err := writeObject(profileStatePath(cfg), Object{"name": name, "applied_at": time.Now().UTC(), "services": p.services}); err != nil {
+	if err := writeObject(profileStatePath(cfg), Object{"name": name, "applied_at": time.Now().UTC(), "services": p.services, "capabilities": p.capabilities}); err != nil {
 		return failed(fail("Could not save the selected profile: %v", err))
 	}
 	result["status"], result["completed"] = "applied", completed
+	result["capabilities"] = verified["capabilities"]
 	return result, nil
 }
 
@@ -328,9 +415,54 @@ func selectedProfile(cfg Object) Object {
 	return state
 }
 
+func (c *Coordinator) runningProfileCapabilities(groups []any, services, snapshot Object) []any {
+	cfg := c.cfg()
+	kept := planProfileServices(cfg, clusterProfile{services: services}, snapshot).keep
+	return profileAvailability(groups, func(provider Object) bool {
+		name, nodes := str(provider["workload"]), stringsOf(provider["nodes"])
+		for _, raw := range kept {
+			step := obj(raw)
+			if str(step["workload"]) == name && sameStrings(stringsOf(step["nodes"]), nodes) {
+				return true
+			}
+		}
+		row := obj(obj(snapshot["models"])[name])
+		if str(row["kind"]) != "llm" || str(row["state"]) != StateReady ||
+			!sameStrings(stringsOf(row["nodes"]), nodes) {
+			return false
+		}
+		record, err := c.runtime.readRecord(name)
+		if err != nil || str(record["state"]) != StateReady {
+			return false
+		}
+		on := str(record["placement"])
+		model, recipe, selectedNodes, _, err := selectPlacement(cfg, name, on)
+		return err == nil && sameStrings(selectedNodes, nodes) &&
+			str(record["fingerprint"]) == lifecycleFingerprint(name, model, recipe, nodes, on)
+	})
+}
+
+func profileCapabilitySummary(groups []any) string {
+	var out strings.Builder
+	for _, raw := range groups {
+		group := obj(raw)
+		providers := []string{}
+		for _, rawProvider := range arr(group["providers"]) {
+			provider := obj(rawProvider)
+			providers = append(providers, str(provider["workload"])+" on "+strings.Join(stringsOf(provider["nodes"]), ", "))
+		}
+		fmt.Fprintf(&out, "  %s: %s (%s)\n", str(group["name"]), str(group["state"]), strings.Join(providers, " + "))
+	}
+	return out.String()
+}
+
 func renderProfile(result Object) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "Profile %s (%s)\n", str(result["profile"]), str(result["status"]))
+	if groups := arr(result["capabilities"]); len(groups) > 0 {
+		out.WriteString("Capabilities now\n")
+		out.WriteString(profileCapabilitySummary(groups))
+	}
 	for _, key := range []string{"kept", "steps"} {
 		for _, v := range arr(result[key]) {
 			row := obj(v)

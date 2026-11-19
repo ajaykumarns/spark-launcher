@@ -21,9 +21,9 @@ func TestProfileApplyNativeLifecycle(t *testing.T) {
 
 	path := filepath.Join(filepath.Dir(env.path), "profiles.yaml")
 	yaml := "version: 1\nprofiles:\n" +
-		"  single:\n    models:\n      - " + integrationModel + ": spark01\n" +
-		"  dual:\n    models:\n      - " + integrationModel + ": both\n" +
-		"  empty:\n    models: []\n"
+		"  single:\n    capabilities:\n      chat:\n        - " + integrationModel + ": spark01\n" +
+		"  dual:\n    capabilities:\n      chat:\n        - " + integrationModel + ": both\n" +
+		"  empty:\n    capabilities: {}\n"
 	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -36,12 +36,25 @@ func TestProfileApplyNativeLifecycle(t *testing.T) {
 	if err != nil || boolean(preview["blocked"]) || len(arr(preview["steps"])) != 1 || env.rankStartsTotal() != 0 {
 		t.Fatalf("preview should show one start and change nothing: %v, %v", preview, err)
 	}
+	if cap := obj(arr(preview["capabilities"])[0]); str(cap["name"]) != "chat" || str(cap["state"]) != "unavailable" {
+		t.Fatalf("a planned start must not be advertised as available: %v", cap)
+	}
 	if _, err := os.Stat(profileStatePath(c.cfg())); !os.IsNotExist(err) {
 		t.Fatalf("preview saved a selection: %v", err)
 	}
 	applied, err := c.Profile("single", true)
 	if err != nil || str(applied["status"]) != "applied" || env.rankStartsTotal() != 1 {
 		t.Fatalf("apply should load one rank: %v, %v", applied, err)
+	}
+	if cap := obj(arr(applied["capabilities"])[0]); str(cap["name"]) != "chat" || str(cap["state"]) != "available" {
+		t.Fatalf("apply must report chat as available after readiness: %v", cap)
+	}
+	snapshot, err := c.Snapshot(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cap := obj(arr(obj(snapshot["profile"])["capabilities"])[0]); str(cap["state"]) != "available" {
+		t.Fatalf("status must report live capability availability: %v", cap)
 	}
 	before, err := c.runtime.readRecord(integrationModel)
 	if err != nil {
@@ -122,16 +135,19 @@ func TestProfileManagesParakeetWithoutRestartingReadyModel(t *testing.T) {
 	content := `version: 1
 profiles:
   with-audio:
-    models:
-      - glm: spark01
-    services:
-      comfyui: spark02
-      parakeet: spark02
+    capabilities:
+      chat:
+        - glm: spark01
+      images:
+        - comfyui: spark02
+      transcription:
+        - parakeet: spark02
   without-audio:
-    models:
-      - glm: spark01
-    services:
-      comfyui: spark02
+    capabilities:
+      chat:
+        - glm: spark01
+      images:
+        - comfyui: spark02
 `
 	if err := os.WriteFile(filepath.Join(filepath.Dir(env.path), "profiles.yaml"), []byte(content), 0600); err != nil {
 		t.Fatal(err)
@@ -280,12 +296,13 @@ func TestProfileSwitchesComfyAndOCR(t *testing.T) {
 	profiles := `version: 1
 profiles:
   media:
-    models: []
-    services:
-      comfyui: spark02
-      spark-ocr: spark01
+    capabilities:
+      images:
+        - comfyui: spark02
+      ocr:
+        - spark-ocr: spark01
   empty:
-    models: []
+    capabilities: {}
 `
 	if err := os.WriteFile(filepath.Join(filepath.Dir(env.path), "profiles.yaml"), []byte(profiles), 0600); err != nil {
 		t.Fatal(err)
@@ -325,5 +342,35 @@ func TestProfilePlansKokoroLikeOtherAudioServices(t *testing.T) {
 	state["running"] = false
 	if plan := planProfileServices(cfg, p, snapshot); len(plan.start) != 1 || len(plan.stop) != 0 {
 		t.Fatalf("selected stopped Kokoro must be started: %+v", plan)
+	}
+}
+
+func TestProfileValidatesCapabilitiesAndPreservesModelOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.yaml")
+	chat := Object{"kind": "llm", "settings": Object{"both": Object{}}}
+	decision := Object{"kind": "llm", "api_kind": "decision", "settings": Object{"spark01": Object{}}}
+	cfg := Object{"models": Object{"glm": chat, "knowline": decision}}
+	yaml := `version: 1
+profiles:
+  valid:
+    capabilities:
+      decisions:
+        - knowline: spark01
+      chat:
+        - glm: both
+  wrong:
+    capabilities:
+      chat:
+        - knowline: spark01
+`
+	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := readProfile(path, "valid", cfg)
+	if err != nil || len(p.models) != 2 || p.models[0].name != "knowline" || p.models[1].name != "glm" {
+		t.Fatalf("expected providers in file order: %v, %v", p.models, err)
+	}
+	if _, err := readProfile(path, "wrong", cfg); err == nil || !strings.Contains(err.Error(), "does not provide the chat capability") {
+		t.Fatalf("wrong capability accepted: %v", err)
 	}
 }

@@ -457,6 +457,9 @@ func (c *Coordinator) snapshot(ctx context.Context, fresh bool) (Object, error) 
 		c.mu.Unlock()
 	}
 	if profile := selectedProfile(c.cfg()); profile != nil {
+		if groups := arr(profile["capabilities"]); len(groups) > 0 {
+			profile["capabilities"] = c.runningProfileCapabilities(groups, obj(profile["services"]), data)
+		}
 		data["profile"] = profile
 	}
 	data["config_path"] = c.path
