@@ -21,7 +21,8 @@ type profileModel struct {
 type clusterProfile struct {
 	name     string
 	models   []profileModel
-	services Object
+	observe  Object
+	parakeet string
 }
 
 func readProfile(path, name string, cfg Object) (clusterProfile, error) {
@@ -79,9 +80,12 @@ func readProfile(path, name string, cfg Object) (clusterProfile, error) {
 	if services, ok := entry["observe"]; ok && !isObject(services) {
 		return p, fail("Profile %s observe must map service names to Sparks.", name)
 	}
-	p.services = obj(entry["observe"])
-	for _, service := range keys(p.services) {
-		node := str(p.services[service])
+	p.observe = obj(entry["observe"])
+	for _, service := range keys(p.observe) {
+		if service == "parakeet" {
+			return p, fail("List Parakeet under services to run it, or omit it to stop it.")
+		}
+		node := str(p.observe[service])
 		if node != "spark01" && node != "spark02" {
 			return p, fail("Give observed service %s an explicit single Spark.", service)
 		}
@@ -93,8 +97,21 @@ func readProfile(path, name string, cfg Object) (clusterProfile, error) {
 			return p, fail("No observable service %s is configured on %s.", service, node)
 		}
 	}
+	if services, ok := entry["services"]; ok && !isObject(services) {
+		return p, fail("Profile %s services must map service names to Sparks.", name)
+	}
+	for service, raw := range obj(entry["services"]) {
+		if service != "parakeet" {
+			return p, fail("Only Parakeet supports profile start and stop. Use observe for %s.", service)
+		}
+		p.parakeet = str(raw)
+		if !contains([]string{"spark01", "spark02"}, p.parakeet) {
+			return p, fail("Give Parakeet an explicit single Spark.")
+		}
+	}
+
 	for _, field := range keys(entry) {
-		if field != "models" && field != "observe" {
+		if field != "models" && field != "services" && field != "observe" {
 			return p, fail("Unknown profile field %s.", field)
 		}
 	}
@@ -130,6 +147,17 @@ func planProfile(cfg Object, p clusterProfile, snapshot Object, ready func(profi
 	}
 
 	released := []string{}
+	audioStop, audioStart, audioKeep, audioBlock := planProfileParakeet(cfg, snapshot, p.parakeet)
+	if audioBlock != "" {
+		blockers = append(blockers, audioBlock)
+	}
+	for _, step := range audioStop {
+		steps = append(steps, step)
+		released = unionNodes(released, stringsOf(step["nodes"]))
+	}
+	if audioKeep != nil {
+		kept = append(kept, audioKeep)
+	}
 	for _, name := range keys(running) {
 		row := obj(running[name])
 		if str(row["kind"]) != "llm" || !boolean(row["loaded"]) || (targets[name] && !stop[name]) {
@@ -169,8 +197,12 @@ func planProfile(cfg Object, p clusterProfile, snapshot Object, ready func(profi
 		started = unionNodes(started, target.nodes)
 	}
 
-	for _, name := range keys(p.services) {
-		node := str(p.services[name])
+	if audioStart != nil {
+		steps = append(steps, audioStart)
+	}
+
+	for _, name := range keys(p.observe) {
+		node := str(p.observe[name])
 		row := obj(running[name])
 		ok := boolean(row["loaded"]) && contains(stringsOf(row["nodes"]), node)
 		if name == "spark-ocr" {
@@ -246,10 +278,10 @@ func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
 	}
 
 	completed := []any{}
-	attempted := false
+	modelChanged := false
 	failed := func(err error) (Object, error) {
 		result["status"], result["error"], result["completed"] = "failed", err.Error(), completed
-		if attempted {
+		if modelChanged {
 			syncCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			if syncErr := c.syncAutoRoutesLocked(syncCtx, nil); syncErr != nil {
@@ -267,8 +299,10 @@ func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
 		}
 		step := obj(v)
 		model := str(step["workload"])
-		attempted = true
-		if str(step["action"]) == "stop" {
+		modelChanged = modelChanged || model != "parakeet"
+		if model == "parakeet" {
+			err = c.runtime.applyProfileParakeet(ctx, step)
+		} else if str(step["action"]) == "stop" {
 			_, err = c.unloadLocked(ctx, model)
 		} else {
 			_, err = c.loadLocked(ctx, model, "", str(step["on"]), c.generationCopy(), true)
@@ -291,7 +325,7 @@ func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
 	if boolean(verified["blocked"]) || len(arr(verified["steps"])) > 0 {
 		return failed(fail("The running state still differs from the profile. Review a new plan."))
 	}
-	if len(completed) > 0 {
+	if modelChanged {
 		if err := c.syncAutoRoutesLocked(ctx, nil); err != nil {
 			return failed(err)
 		}
@@ -332,7 +366,7 @@ func renderProfile(result Object) string {
 		}
 	}
 	if len(arr(result["steps"])) == 0 {
-		out.WriteString("  No model starts, stops, or restarts.\n")
+		out.WriteString("  No model or service starts, stops, or restarts.\n")
 	}
 	routes := obj(result["expected_routes"])
 	for _, route := range keys(routes) {

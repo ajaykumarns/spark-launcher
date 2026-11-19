@@ -1,8 +1,11 @@
 package sparky
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -94,5 +97,113 @@ func TestProfilePlanBlocksUnplannedEvictionAndInvalidSharing(t *testing.T) {
 	plan = planProfile(cfg, p, snapshot, ready)
 	if len(arr(plan["blockers"])) != 2 {
 		t.Fatalf("expected memory and sharing conflicts: %v", plan)
+	}
+}
+
+func TestProfileManagesParakeetWithoutRestartingReadyModel(t *testing.T) {
+	env := newImageEnv(t, "native")
+	cfg := env.coord.Config()
+	obj(cfg["models"])["parakeet"] = Object{
+		"kind": "audio", "run_on": "spark02", "keep_loaded": true,
+		"settings": Object{"spark02": Object{"containers": []any{"parakeet-engine", "parakeet-gateway"}}},
+	}
+	obj(cfg["policy"])["protected_models"] = []any{"parakeet"}
+	if err := writeCluster(env.path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.coord.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	env.readyRecord()
+	before, err := env.rt.readRecord("glm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := `version: 1
+profiles:
+  with-audio:
+    models:
+      - glm: spark01
+    services:
+      parakeet: spark02
+  without-audio:
+    models:
+      - glm: spark01
+`
+	if err := os.WriteFile(filepath.Join(filepath.Dir(env.path), "profiles.yaml"), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The SSH test double shares the container state between inspection and
+	// changes. The native model uses the existing integration test doubles.
+	running := map[string]bool{"parakeet-engine": false, "parakeet-gateway": false}
+	run := env.rt.Run
+	var mutations []string
+	env.rt.Run = func(ctx context.Context, args []string, input []byte) (CommandResult, error) {
+		cmd := args[len(args)-1]
+		if args[0] != "ssh" {
+			return run(ctx, args, input)
+		}
+		if strings.Contains(cmd, "node probe") {
+			row, err := env.dev.probe(nil)
+			containers := Object{}
+			for name, active := range running {
+				containers[name] = Object{"running": active}
+			}
+			row["containers"] = containers
+			return CommandResult{Out: string(jsonBytes(row))}, err
+		}
+		prefix := shellJoin([]string{"sudo", "-n", "docker"}) + " "
+		if !strings.HasPrefix(cmd, prefix) {
+			return run(ctx, args, input)
+		}
+		if args[len(args)-2] != "spark02" {
+			t.Fatalf("Parakeet command used the wrong host: %v", args)
+		}
+		first, _, _ := strings.Cut(strings.TrimPrefix(cmd, prefix), " ")
+		verb, name := strings.Trim(first, "'"), ""
+		for container := range running {
+			if strings.HasSuffix(cmd, " "+shellQuote(container)) {
+				name = container
+			}
+		}
+		if name == "" {
+			t.Fatalf("unexpected Docker container: %v", args)
+		}
+		switch verb {
+		case "start", "stop":
+			mutations = append(mutations, verb+" "+name)
+			running[name] = verb == "start"
+		case "inspect":
+			if !running[name] {
+				t.Fatalf("readiness checked before start: %v", args)
+			}
+			return CommandResult{Out: "healthy\n"}, nil
+		default:
+			t.Fatalf("unexpected command: %v", args)
+		}
+		return CommandResult{}, nil
+	}
+
+	plan, err := env.coord.Profile("with-audio", false)
+	if err != nil || boolean(plan["blocked"]) || len(arr(plan["steps"])) != 1 || len(mutations) != 0 {
+		t.Fatalf("preview must show audio start with no effects: %v, %v", plan, err)
+	}
+	for _, name := range []string{"with-audio", "with-audio", "without-audio", "without-audio"} {
+		result, err := env.coord.Profile(name, true)
+		if err != nil || str(result["status"]) != "applied" {
+			t.Fatalf("apply %s: %v, %v", name, result, err)
+		}
+	}
+	want := []string{"start parakeet-engine", "start parakeet-gateway", "stop parakeet-gateway", "stop parakeet-engine"}
+	if !slices.Equal(mutations, want) {
+		t.Fatalf("wanted ordered, repeat-safe Docker operations: %v", mutations)
+	}
+	after, err := env.rt.readRecord("glm")
+	if err != nil || before["generation"] != after["generation"] || str(after["state"]) != StateReady {
+		t.Fatalf("GLM generation changed: %v, %v", after, err)
+	}
+	if _, err := env.coord.Unload("parakeet", false); err == nil {
+		t.Fatal("profile membership must not remove protection from a direct unload")
 	}
 }

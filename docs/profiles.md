@@ -1,7 +1,7 @@
 # Cluster profiles
 
-A cluster profile lists the language and decision models that should run
-together. Give each model an explicit placement. The model catalog in
+A cluster profile lists the language models, decision models, and services
+that should run together. Give each model an explicit placement. The model catalog in
 `models.json` still defines the installed recipes and supported placements.
 
 Store profiles in `config/profiles.yaml` beside `models.json` on the head Spark.
@@ -14,7 +14,7 @@ profiles:
     models:
       - glm: both
       - knowline: spark01
-    observe:
+    services:
       parakeet: spark02
 ```
 
@@ -38,9 +38,16 @@ the last successfully applied profile name. Review the live state and plan
 again after a failure. Sparky does not automatically restart the prior set
 of models or apply a profile at boot.
 
-`observe` lists services that must already be running. This version checks
-audio, ComfyUI, and Spark01 OCR without starting or stopping them. Those
-services still use their existing lifecycle controls. The plan reports
+`services` controls Parakeet. Include it to start its installed containers or
+keep them running. Omit it to stop the containers. The profile stops the
+gateway before the engine and starts the engine before the gateway. Profile
+apply can stop Parakeet even when the catalog protects it from direct unload.
+Sparky gives containers 30 seconds to stop. Audio requests do not use the
+language model drain mechanism.
+
+`observe` lists services that must already be running. It checks Kokoro,
+ComfyUI, and Spark01 OCR. These services keep their existing lifecycle
+controls. The plan reports
 expected chat and decision auto targets using the current Bifrost routing
 policy. Existing route reconciliation uses live model readiness.
 `sparky status` reports the last applied profile and the actual running state.
