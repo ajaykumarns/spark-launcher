@@ -440,6 +440,19 @@ func validateCluster(c Object) error {
 			}
 		}
 	}
+	if av, ok := c["decision_auto"]; ok {
+		a := obj(av)
+		if !isObject(av) || str(a["routing"]) != "bifrost" || !validStrings(a["targets"]) || len(arr(a["targets"])) == 0 {
+			return fail("Decision auto routing requires bifrost and decision model targets.")
+		}
+		seen := map[string]bool{}
+		for _, name := range stringsOf(a["targets"]) {
+			if seen[name] || !contains(enabledLLMs(c), name) || str(obj(models[name])["api_kind"]) != "decision" {
+				return fail("Decision auto targets must name distinct enabled decision models.")
+			}
+			seen[name] = true
+		}
+	}
 	return nil
 }
 func enabledLLMs(c Object) []string {

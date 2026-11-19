@@ -627,3 +627,33 @@ does not add a new scheduling or model-switch policy.
 A language model owns its devices exclusively by default. With the native lifecycle, a placement can set `shared_device: true` to permit other opted-in language models on the same device. Each shared placement must specify a positive `minimum_available_gib` for every device it uses. This is the free memory required before that model starts. Set it high enough for the model's full runtime allocation and the memory reserve needed by the host. Bound each backend's memory use separately; this check is not a runtime memory limit.
 
 Sparky admits a new model only after existing shared owners are ready. It keeps the selected recipe for each running model, so a later catalog edit cannot change that model's ownership. Models that do not opt in remain exclusive. The legacy lifecycle does not support this setting.
+
+### Automatic routing for decision models
+
+Use `spark-decision/auto` with Bifrost's `/v1/decisions` endpoint.
+The controller uses the same routing-rule update process as chat auto routing.
+It includes only loaded, ready decision models in the rule.
+It removes a target before that model stops.
+Requests never load or unload a model.
+If no decision model is ready, the route returns HTTP 503.
+
+Configure the permitted models in the central file:
+
+```json
+"decision_auto": {
+  "routing": "bifrost",
+  "targets": ["knowline-4b-gen5.5", "jeffan-9b-1211"]
+}
+```
+
+Each target must have `api_kind: "decision"`.
+Bifrost balances requests across ready targets with equal weights.
+Stopped models do not enter the pool.
+The `decision_auto_routing` field in `sparky status --json` shows the current pool.
+
+The Bifrost alias provider is `spark-decision`.
+Its TypeSafe configuration uses the existing controller endpoint and decision request path.
+Its key permits `auto` and the internal `sparky-decision-auto-unavailable` error target.
+The controller maintains the `sparky-decision-auto` routing rule.
+That rule sends ready requests through the existing `spark-decisions` provider.
+The chat auto rule and named model routes stay separate.

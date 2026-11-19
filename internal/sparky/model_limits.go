@@ -16,6 +16,19 @@ func (c *Coordinator) LiveCatalog() Object {
 		row := obj(raw)
 		row["context_window"] = row["context_length"]
 		row["max_output_tokens"] = row["output_tokens"]
+		if str(row["id"]) == "spark-decision/auto" {
+			for _, key := range []string{"context_length", "context_window", "output_tokens", "max_output_tokens"} {
+				delete(row, key)
+			}
+			row["dynamic"], row["available"] = true, false
+			row["routing"], row["request_model"] = "bifrost", "spark-decision/auto"
+			c.mu.Lock()
+			for key, value := range c.decisionAutoPool {
+				row[key] = value
+			}
+			c.mu.Unlock()
+			continue
+		}
 		if str(row["id"]) != "garuda/spark-auto" {
 			continue
 		}

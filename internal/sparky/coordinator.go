@@ -50,6 +50,7 @@ type Coordinator struct {
 	fenced, reloading       bool
 	imageGate               chan struct{}
 	autoPool                Object
+	decisionAutoPool        Object
 }
 
 func newCoordinator(path string, rt *Runtime) (*Coordinator, error) {
@@ -450,6 +451,11 @@ func (c *Coordinator) snapshot(ctx context.Context, fresh bool) (Object, error) 
 		data["auto_routing"] = copyObject(c.autoPool)
 		c.mu.Unlock()
 	}
+	if decisionBifrostAuto(c.cfg()) {
+		c.mu.Lock()
+		data["decision_auto_routing"] = copyObject(c.decisionAutoPool)
+		c.mu.Unlock()
+	}
 	data["config_path"] = c.path
 	return data, nil
 }
@@ -606,8 +612,8 @@ func (c *Coordinator) llmRequest(ctx context.Context, requested string) (string,
 		return "", "", err
 	}
 	cfg := c.cfg()
-	if bifrostAuto(cfg) && (autoRequested(requested) || requested == "sparky-auto-unavailable") {
-		return "", "", autoUnavailableError{"Automatic inference must use the Bifrost spark-auto route. No automatic target is available, or the caller used a provider-prefixed alias."}
+	if gatewayAutoEnabled(cfg) && (autoRequested(requested) || requested == "sparky-auto-unavailable" || requested == "spark-decision/auto" || requested == decisionAutoUnavailableModel) {
+		return "", "", autoUnavailableError{"No automatic target is available through Bifrost. Auto requests never load or unload a model."}
 	}
 	var name string
 	var err error

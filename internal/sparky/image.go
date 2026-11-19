@@ -205,6 +205,15 @@ func (c *Coordinator) LLMWire() (Object, error) {
 		data = append(data, Object{"id": "spark-auto", "object": "model", "owned_by": "sparky",
 			"status": Object{"value": value}})
 	}
+	if decisionBifrostAuto(cfg) {
+		value := "unloaded"
+		c.mu.Lock()
+		if boolean(c.decisionAutoPool["available"]) {
+			value = "loaded"
+		}
+		c.mu.Unlock()
+		data = append(data, Object{"id": "auto", "object": "model", "owned_by": "sparky", "status": Object{"value": value}})
+	}
 	return Object{"object": "list", "data": data}, nil
 }
 
