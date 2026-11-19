@@ -109,6 +109,9 @@ func TestDecisionAutoGatewayKeepsChatRuleAndUsesReadyDecisionProvider(t *testing
 	if str(rule["cel_expression"]) != "provider == 'spark-decision' && model == 'auto'" {
 		t.Fatal(rule)
 	}
+	if num(rule["priority"]) == num(chat["priority"]) {
+		t.Fatal("Bifrost requires distinct priorities for global rules")
+	}
 	targets := arr(rule["targets"])
 	if len(targets) != 1 || str(obj(targets[0])["provider"]) != "spark-decisions" || str(obj(targets[0])["model"]) != "knowline" {
 		t.Fatal(targets)

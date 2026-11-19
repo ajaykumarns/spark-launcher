@@ -49,7 +49,9 @@ func syncDecisionAutoGateway(ctx context.Context, cfg Object, models []string) e
 func syncGatewayAutoRule(ctx context.Context, cfg Object, models []string, decision bool) error {
 	name, description, expression := autoRuleName, autoRuleDescription, autoRuleCEL
 	targets, fallbacks := autoRuleTargets(models)
+	priority := 0
 	if decision {
+		priority = 1
 		name, description = "sparky-decision-auto", "Sparky ready decision model pool"
 		expression = "provider == 'spark-decision' && model == 'auto'"
 		targets, fallbacks = autoRuleTargetsFor(models, "spark-decisions", "spark-decision", decisionAutoUnavailableModel)
@@ -66,7 +68,7 @@ func syncGatewayAutoRule(ctx context.Context, cfg Object, models []string, decis
 		"enabled":        true,
 		"chain_rule":     false,
 		"scope":          "global",
-		"priority":       0,
+		"priority":       priority,
 		"cel_expression": expression,
 		"targets":        targets,
 		"fallbacks":      fallbacks,
@@ -234,7 +236,7 @@ func autoRuleEqual(current, desired Object) bool {
 		!boolean(current["enabled"]) ||
 		boolean(current["chain_rule"]) ||
 		str(current["scope"]) != "global" ||
-		num(current["priority"]) != 0 ||
+		num(current["priority"]) != num(desired["priority"]) ||
 		str(current["cel_expression"]) != str(desired["cel_expression"]) {
 		return false
 	}
