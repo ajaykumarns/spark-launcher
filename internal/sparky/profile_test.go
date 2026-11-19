@@ -156,6 +156,12 @@ profiles:
 	// The SSH test double shares the container state between inspection and
 	// changes. The native model uses the existing integration test doubles.
 	running := map[string]bool{"parakeet-engine": false, "parakeet-gateway": false}
+	localProbe := env.rt.ProbeNode
+	env.rt.ProbeNode = func(meta Object) (Object, error) {
+		state, err := localProbe(meta)
+		state["comfyui"] = Object{"reachable": false}
+		return state, err
+	}
 	run := env.rt.Run
 	var mutations []string
 	env.rt.Run = func(ctx context.Context, args []string, input []byte) (CommandResult, error) {
@@ -169,6 +175,7 @@ profiles:
 			for name, active := range running {
 				containers[name] = Object{"running": active}
 			}
+			obj(row["units"])["comfyui.service"] = "active"
 			row["containers"] = containers
 			return CommandResult{Out: string(jsonBytes(row))}, err
 		}
@@ -218,6 +225,14 @@ profiles:
 	if !slices.Equal(mutations, want) {
 		t.Fatalf("wanted ordered, repeat-safe Docker operations: %v", mutations)
 	}
+	env.llm.server.Close()
+	snapshot, err := env.coord.Snapshot(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chat := obj(arr(obj(snapshot["profile"])["capabilities"])[0]); str(chat["state"]) != "unavailable" {
+		t.Fatalf("the failed backend must make chat unavailable even with a ready record: %v", chat)
+	}
 	after, err := env.rt.readRecord("glm")
 	if err != nil || before["generation"] != after["generation"] || str(after["state"]) != StateReady {
 		t.Fatalf("GLM generation changed: %v, %v", after, err)
@@ -254,6 +269,7 @@ func TestProfileSwitchesComfyAndOCR(t *testing.T) {
 	localProbe := env.rt.ProbeNode
 	env.rt.ProbeNode = func(meta Object) (Object, error) {
 		state, err := localProbe(meta)
+		state["comfyui"] = Object{"reachable": false}
 		state["containers"] = Object{
 			"spark-ocr":      Object{"running": ocrRunning},
 			"garuda-gateway": Object{"running": true},
@@ -310,6 +326,10 @@ profiles:
 	if result, err := env.coord.Profile("media", true); err != nil || str(result["status"]) != "applied" {
 		t.Fatalf("start services: %v, %v", result, err)
 	}
+	ocrSetHealth(t, nil, fail("OCR API unavailable"))
+	if result, err := env.coord.Profile("media", true); err != nil || !boolean(result["blocked"]) || len(changes) != 2 {
+		t.Fatalf("unready OCR must block before changing any service: %v, %v", result, err)
+	}
 	imageBusy = true
 	if result, err := env.coord.Profile("empty", true); err != nil || !boolean(result["blocked"]) || len(changes) != 2 {
 		t.Fatalf("busy ComfyUI must block before stopping any service: %v, %v", result, err)
@@ -332,15 +352,19 @@ func TestProfilePlansKokoroLikeOtherAudioServices(t *testing.T) {
 	}}}
 	state := Object{"running": true}
 	snapshot := Object{"nodes": Object{"spark01": Object{"containers": Object{"garuda-kokoro-tts": state}}}}
-	p := clusterProfile{services: Object{"kokoro": "spark01"}}
-	if plan := planProfileServices(cfg, p, snapshot); len(plan.keep) != 1 || len(plan.start)+len(plan.stop) != 0 {
+	groups := []any{Object{"name": "speech", "providers": []any{profileStep("keep", "kokoro", []string{"spark01"})}}}
+	if plan := planProfileServices(cfg, groups, snapshot); len(plan.keep) != 1 || len(plan.start)+len(plan.stop) != 0 {
 		t.Fatalf("running Kokoro must be kept: %+v", plan)
 	}
-	if plan := planProfileServices(cfg, clusterProfile{}, snapshot); len(plan.stop) != 1 || len(plan.start) != 0 {
+	if plan := planProfileServices(cfg, nil, snapshot); len(plan.stop) != 1 || len(plan.start) != 0 {
 		t.Fatalf("omitted Kokoro must be stopped: %+v", plan)
 	}
+	state["health"] = "unhealthy"
+	if plan := planProfileServices(cfg, groups, snapshot); len(plan.blockers) != 1 || len(plan.keep) != 0 {
+		t.Fatalf("unhealthy Kokoro must not be reported ready: %+v", plan)
+	}
 	state["running"] = false
-	if plan := planProfileServices(cfg, p, snapshot); len(plan.start) != 1 || len(plan.stop) != 0 {
+	if plan := planProfileServices(cfg, groups, snapshot); len(plan.start) != 1 || len(plan.stop) != 0 {
 		t.Fatalf("selected stopped Kokoro must be started: %+v", plan)
 	}
 }
@@ -372,5 +396,37 @@ profiles:
 	}
 	if _, err := readProfile(path, "wrong", cfg); err == nil || !strings.Contains(err.Error(), "does not provide the chat capability") {
 		t.Fatalf("wrong capability accepted: %v", err)
+	}
+}
+
+func TestProfileChecksEveryComfyUnit(t *testing.T) {
+	cfg := Object{"nodes": Object{"spark01": Object{"comfy_unit": "comfyui.service"}}}
+	units := Object{"comfyui.service": "active"}
+	snapshot := Object{
+		"nodes":   Object{"spark01": Object{"units": units}},
+		"comfyui": Object{"spark01": Object{"reachable": true, "running": 0, "pending": 0}},
+	}
+	if plan := planProfileServices(cfg, nil, snapshot); len(plan.stop) != 1 || len(plan.blockers) != 0 {
+		t.Fatalf("an omitted running unit is managed even without a catalog recipe: %+v", plan)
+	}
+	units["comfyui.service"] = "inactive"
+	if plan := planProfileServices(cfg, nil, snapshot); len(plan.stop) != 0 || len(plan.blockers) != 1 {
+		t.Fatalf("an unmanaged engine cannot be stopped through the inactive unit: %+v", plan)
+	}
+}
+
+func TestProfileCanStopFailedOwnedModel(t *testing.T) {
+	row := Object{"kind": "llm", "loaded": true, "state": StateFailed, "reserved": true, "nodes": []any{"spark01"}}
+	snapshot := Object{"models": Object{"glm": row}}
+	ready := func(profileModel) bool { return false }
+	result := planProfile(nil, clusterProfile{}, snapshot, ready)
+	steps := arr(result["steps"])
+	if boolean(result["blocked"]) || len(steps) != 1 || str(obj(steps[0])["action"]) != "stop" {
+		t.Fatalf("a failed model with confirmed ownership can be stopped: %v", result)
+	}
+	row["reserved"] = false
+	result = planProfile(nil, clusterProfile{}, snapshot, ready)
+	if !boolean(result["blocked"]) || len(arr(result["steps"])) != 0 {
+		t.Fatalf("an unowned model cannot be stopped: %v", result)
 	}
 }

@@ -53,13 +53,15 @@ use the installed recipes and do not install services. The gateway,
 inference proxy, and Sparky controller run independently of profiles.
 
 Sparky refuses to stop ComfyUI while it has active or queued jobs. Image
-requests use the engine selected by the applied profile. They cannot start
-an engine the profile leaves stopped. Image checkpoints still load per
-workflow. Profile apply does not change the image engine memory limits.
+workflow requests use the engine selected by the applied profile. The Bifrost
+image API requires its configured model node to match the selected engine.
+Image checkpoints load per workflow. Profile apply does not change the
+image engine memory limits.
 
 Audio containers start in recipe order and stop in reverse order.
-OCR uses the existing OCR controls. Stop operations can interrupt active
-audio or OCR requests. Profile apply does not change system boot policies.
+Sparky checks Docker health when the container reports it. Sparky checks
+the OCR health endpoint and uses the existing OCR controls. Stop operations
+can interrupt active audio or OCR requests. Profile apply does not change system boot policies.
 
 The plan reports expected chat and decision auto targets using the current
 Bifrost routing policy. Existing route reconciliation uses live model

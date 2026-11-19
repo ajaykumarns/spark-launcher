@@ -16,9 +16,13 @@ func planProfileAudio(name string, settings, snapshot Object, want string) (stop
 		inventory := obj(obj(obj(snapshot["nodes"])[node])["containers"])
 		var running, stopped []string
 		for _, container := range names {
-			state, known := obj(inventory[container])["running"].(bool)
+			row := obj(inventory[container])
+			state, known := row["running"].(bool)
 			switch {
 			case known && state:
+				if health := str(row["health"]); want == node && health != "" && health != "healthy" {
+					return nil, nil, nil, fmt.Sprintf("%s container %s is not healthy on %s.", name, container, node)
+				}
 				running = append(running, container)
 			case known:
 				stopped = append(stopped, container)
@@ -62,7 +66,6 @@ func (r *Runtime) applyProfileAudio(ctx context.Context, step Object) error {
 			}
 		}
 	}
-	r.invalidate()
 	return nil
 }
 

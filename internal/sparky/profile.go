@@ -21,7 +21,6 @@ type profileModel struct {
 type clusterProfile struct {
 	name         string
 	models       []profileModel
-	services     Object
 	capabilities []any
 }
 
@@ -65,12 +64,12 @@ func readProfile(path, name string, cfg Object) (clusterProfile, error) {
 	if groups.Kind != yaml.MappingNode {
 		return p, fail("Profile %s must define capabilities. Use capabilities: {} for an empty profile.", name)
 	}
-	p.services = Object{}
 	p.capabilities = []any{}
 	seen, seenGroups := map[string]bool{}, map[string]bool{}
 	for i := 0; i < len(groups.Content); i += 2 {
-		group, list := groups.Content[i].Value, groups.Content[i+1]
-		if !contains([]string{"chat", "decisions", "transcription", "speech", "images", "ocr"}, group) || seenGroups[group] {
+		key, list := groups.Content[i], groups.Content[i+1]
+		group := key.Value
+		if key.ShortTag() != "!!str" || !contains([]string{"chat", "decisions", "transcription", "speech", "images", "ocr"}, group) || seenGroups[group] {
 			return p, fail("Unknown or repeated profile capability %s.", group)
 		}
 		seenGroups[group] = true
@@ -79,7 +78,8 @@ func readProfile(path, name string, cfg Object) (clusterProfile, error) {
 		}
 		providers := []any{}
 		for _, item := range list.Content {
-			if item.Kind != yaml.MappingNode || len(item.Content) != 2 {
+			if item.Kind != yaml.MappingNode || len(item.Content) != 2 ||
+				item.Content[0].ShortTag() != "!!str" || item.Content[1].ShortTag() != "!!str" {
 				return p, fail("Each %s workload must use 'workload: placement'.", group)
 			}
 			id, on := item.Content[0].Value, item.Content[1].Value
@@ -89,7 +89,10 @@ func readProfile(path, name string, cfg Object) (clusterProfile, error) {
 			var m, s Object
 			var nodes []string
 			canonical := id
-			if id == "spark-ocr" && on == "spark01" {
+			if id == "spark-ocr" {
+				if on != "spark01" {
+					return p, fail("Spark OCR is available only on spark01.")
+				}
 				nodes = []string{on}
 			} else {
 				var err error
@@ -111,11 +114,8 @@ func readProfile(path, name string, cfg Object) (clusterProfile, error) {
 			seen[canonical] = true
 			if str(m["kind"]) == "llm" {
 				p.models = append(p.models, profileModel{canonical, on, nodes, m, s})
-			} else {
-				if len(nodes) != 1 {
-					return p, fail("Give service %s an explicit single Spark.", id)
-				}
-				p.services[canonical] = on
+			} else if len(nodes) != 1 {
+				return p, fail("Give service %s an explicit single Spark.", id)
 			}
 			providers = append(providers, Object{"workload": canonical, "nodes": anyStrings(nodes)})
 		}
@@ -125,7 +125,7 @@ func readProfile(path, name string, cfg Object) (clusterProfile, error) {
 }
 
 func profileCapability(name string, model Object) string {
-	if name == "spark-ocr" {
+	if name == "spark-ocr" && model == nil {
 		return "ocr"
 	}
 	switch str(model["kind"]) {
@@ -140,7 +140,9 @@ func profileCapability(name string, model Object) string {
 		}
 		return "transcription"
 	case "comfyui":
-		return "images"
+		if name == "comfyui" {
+			return "images"
+		}
 	}
 	return ""
 }
@@ -174,16 +176,28 @@ func profileAvailability(groups []any, ready func(Object) bool) []any {
 	return out
 }
 
-func profilePlansAvailability(p clusterProfile, kept []any) []any {
-	return profileAvailability(p.capabilities, func(provider Object) bool {
-		for _, raw := range kept {
-			step := obj(raw)
-			if step["workload"] == provider["workload"] && sameStrings(stringsOf(step["nodes"]), stringsOf(provider["nodes"])) {
-				return true
+func profileServicePlacement(groups []any, name string) string {
+	for _, raw := range groups {
+		for _, item := range arr(obj(raw)["providers"]) {
+			provider := obj(item)
+			nodes := stringsOf(provider["nodes"])
+			if str(provider["workload"]) == name && len(nodes) == 1 {
+				return nodes[0]
 			}
 		}
-		return false
-	})
+	}
+	return ""
+}
+
+func profileProviderKept(kept []any, provider Object) bool {
+	for _, raw := range kept {
+		step := obj(raw)
+		if str(step["workload"]) == str(provider["workload"]) &&
+			sameStrings(stringsOf(step["nodes"]), stringsOf(provider["nodes"])) {
+			return true
+		}
+	}
+	return false
 }
 
 func profileStep(action, name string, nodes []string) Object {
@@ -215,7 +229,7 @@ func planProfile(cfg Object, p clusterProfile, snapshot Object, ready func(profi
 	}
 
 	released := []string{}
-	services := planProfileServices(cfg, p, snapshot)
+	services := planProfileServices(cfg, p.capabilities, snapshot)
 	steps = append(steps, services.stop...)
 	kept = append(kept, services.keep...)
 	blockers = append(blockers, services.blockers...)
@@ -230,8 +244,8 @@ func planProfile(cfg Object, p clusterProfile, snapshot Object, ready func(profi
 		nodes := stringsOf(row["nodes"])
 		if effectiveProtected(row, obj(cfg["policy"]), name) {
 			blockers = append(blockers, fmt.Sprintf("%s is protected and cannot be stopped.", name))
-		} else if !boolean(row["reserved"]) || len(nodes) == 0 || str(row["state"]) != StateReady {
-			blockers = append(blockers, fmt.Sprintf("Sparky cannot confirm ready ownership of %s. Check its lifecycle before applying.", name))
+		} else if !boolean(row["reserved"]) || len(nodes) == 0 {
+			blockers = append(blockers, fmt.Sprintf("Sparky cannot confirm ownership of %s. Check its lifecycle before applying.", name))
 		} else {
 			steps = append(steps, profileStep("stop", name, nodes))
 			released = unionNodes(released, nodes)
@@ -278,7 +292,9 @@ func planProfile(cfg Object, p clusterProfile, snapshot Object, ready func(profi
 	}
 	return Object{"profile": p.name, "status": "planned", "kept": kept, "steps": steps,
 		"blockers": blockers, "blocked": len(blockers) > 0, "expected_routes": routes,
-		"capabilities": profilePlansAvailability(p, kept)}
+		"capabilities": profileAvailability(p.capabilities, func(provider Object) bool {
+			return profileProviderKept(kept, provider)
+		})}
 }
 
 func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
@@ -301,32 +317,37 @@ func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
 		return nil, err
 	}
 	cfg := c.cfg()
-	if !c.runtime.native() {
+	if str(cfg["lifecycle"]) != "native" {
 		return nil, fail("Cluster profiles require the native model lifecycle.")
 	}
 	p, err := readProfile(filepath.Join(filepath.Dir(c.path), "profiles.yaml"), name, cfg)
 	if err != nil {
 		return nil, err
 	}
+	rt := c.runtime.frozenClone(cfg)
 	preview := func() (Object, error) {
-		snapshot, err := c.runtime.snapshot(ctx, true)
+		snapshot, err := rt.snapshot(ctx, true)
 		if err != nil {
 			return nil, err
 		}
-		if str(p.services["spark-ocr"]) == "spark01" {
-			ocr, err := newOCRService(c.runtime.root())
-			if err != nil {
-				return nil, err
+		if profileServicePlacement(p.capabilities, "spark-ocr") == "spark01" {
+			if profileOCRRunning(snapshot) {
+				checkProfileOCR(snapshot)
+			} else {
+				ocr, err := newOCRService(rt.root())
+				if err != nil {
+					return nil, err
+				}
+				source, err := ocr.ocrSource()
+				if err != nil {
+					return nil, err
+				}
+				snapshot["ocr_installed"] = ocrFileExists(filepath.Join(source, "deploy", "compose.yaml")) &&
+					ocrFileExists(ocr.ocrEnvFile(source))
 			}
-			source, err := ocr.ocrSource()
-			if err != nil {
-				return nil, err
-			}
-			snapshot["ocr_installed"] = ocrFileExists(filepath.Join(source, "deploy", "compose.yaml")) &&
-				ocrFileExists(ocr.ocrEnvFile(source))
 		}
 		return planProfile(cfg, p, snapshot, func(m profileModel) bool {
-			return c.runtime.nativeReady(ctx, m.name, m.model, m.recipe, m.nodes, m.placement)
+			return rt.nativeReady(ctx, m.name, m.model, m.recipe, m.nodes, m.placement)
 		}), nil
 	}
 	result, err := preview()
@@ -350,23 +371,32 @@ func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
 		}
 		return result, nil
 	}
-	for _, v := range arr(result["steps"]) {
+	checkConfig := func() error {
 		if err := c.refresh(); err != nil {
-			return failed(err)
+			return err
 		}
 		if compactJSON(c.cfg()) != compactJSON(cfg) {
-			return failed(fail("The cluster configuration changed during apply. Review a new plan."))
+			return fail("The cluster configuration changed during apply. Review a new plan.")
+		}
+		if c.Fenced() {
+			return fail("Admission is paused. Retry after it resumes.")
+		}
+		return nil
+	}
+	for _, v := range arr(result["steps"]) {
+		if err := checkConfig(); err != nil {
+			return failed(err)
 		}
 		step := obj(v)
 		model := str(step["workload"])
 		if kind := str(step["service_kind"]); kind != "" {
-			err = c.applyProfileService(ctx, kind, step)
+			err = c.applyProfileService(ctx, rt, kind, step)
 		} else {
 			modelChanged = true
 			if str(step["action"]) == "stop" {
-				_, err = c.unloadLocked(ctx, model)
+				_, err = c.unloadLocked(ctx, cfg, model)
 			} else {
-				_, err = c.loadLocked(ctx, model, "", str(step["on"]), c.generationCopy(), true)
+				_, err = c.loadLocked(ctx, cfg, model, "", str(step["on"]), c.generationCopy(), true)
 			}
 		}
 		if err != nil {
@@ -374,11 +404,8 @@ func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
 		}
 		completed = append(completed, step)
 	}
-	if err := c.refresh(); err != nil {
+	if err := checkConfig(); err != nil {
 		return failed(err)
-	}
-	if compactJSON(c.cfg()) != compactJSON(cfg) {
-		return failed(fail("The cluster configuration changed during apply. Review a new plan."))
 	}
 	verified, err := preview()
 	if err != nil {
@@ -392,7 +419,10 @@ func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
 			return failed(err)
 		}
 	}
-	if err := writeObject(profileStatePath(cfg), Object{"name": name, "applied_at": time.Now().UTC(), "services": p.services, "capabilities": p.capabilities}); err != nil {
+	if err := checkConfig(); err != nil {
+		return failed(err)
+	}
+	if err := writeObject(profileStatePath(cfg), Object{"name": name, "applied_at": time.Now().UTC(), "capabilities": p.capabilities}); err != nil {
 		return failed(fail("Could not save the selected profile: %v", err))
 	}
 	result["status"], result["completed"] = "applied", completed
@@ -409,36 +439,36 @@ func selectedProfile(cfg Object) Object {
 	if os.IsNotExist(err) {
 		return nil
 	}
-	if err != nil || !simpleName.MatchString(str(state["name"])) {
+	if err != nil || !simpleName.MatchString(str(state["name"])) || arr(state["capabilities"]) == nil {
 		return Object{"error": "Could not read the selected profile."}
 	}
 	return state
 }
 
-func (c *Coordinator) runningProfileCapabilities(groups []any, services, snapshot Object) []any {
+func (c *Coordinator) runningProfileCapabilities(ctx context.Context, groups []any, snapshot Object) []any {
 	cfg := c.cfg()
-	kept := planProfileServices(cfg, clusterProfile{services: services}, snapshot).keep
+	if profileServicePlacement(groups, "spark-ocr") == "spark01" {
+		checkProfileOCR(snapshot)
+	}
+	kept := planProfileServices(cfg, groups, snapshot).keep
 	return profileAvailability(groups, func(provider Object) bool {
-		name, nodes := str(provider["workload"]), stringsOf(provider["nodes"])
-		for _, raw := range kept {
-			step := obj(raw)
-			if str(step["workload"]) == name && sameStrings(stringsOf(step["nodes"]), nodes) {
-				return true
-			}
+		if profileProviderKept(kept, provider) {
+			return true
 		}
+		name, nodes := str(provider["workload"]), stringsOf(provider["nodes"])
 		row := obj(obj(snapshot["models"])[name])
 		if str(row["kind"]) != "llm" || str(row["state"]) != StateReady ||
 			!sameStrings(stringsOf(row["nodes"]), nodes) {
 			return false
 		}
 		record, err := c.runtime.readRecord(name)
-		if err != nil || str(record["state"]) != StateReady {
+		if err != nil {
 			return false
 		}
 		on := str(record["placement"])
 		model, recipe, selectedNodes, _, err := selectPlacement(cfg, name, on)
 		return err == nil && sameStrings(selectedNodes, nodes) &&
-			str(record["fingerprint"]) == lifecycleFingerprint(name, model, recipe, nodes, on)
+			c.runtime.nativeReadyWithWorkerChecks(ctx, name, model, recipe, nodes, on, false)
 	})
 }
 
@@ -460,7 +490,11 @@ func renderProfile(result Object) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "Profile %s (%s)\n", str(result["profile"]), str(result["status"]))
 	if groups := arr(result["capabilities"]); len(groups) > 0 {
-		out.WriteString("Capabilities now\n")
+		if str(result["status"]) == "failed" {
+			out.WriteString("Capabilities before apply\n")
+		} else {
+			out.WriteString("Capabilities now\n")
+		}
 		out.WriteString(profileCapabilitySummary(groups))
 	}
 	for _, key := range []string{"kept", "steps"} {

@@ -25,13 +25,13 @@ func (p *profileServicePlan) add(action, name, node, kind string) {
 	}
 }
 
-func planProfileServices(cfg Object, p clusterProfile, snapshot Object) profileServicePlan {
+func planProfileServices(cfg Object, groups []any, snapshot Object) profileServicePlan {
 	var plan profileServicePlan
 	models := obj(cfg["models"])
 	for _, name := range keys(models) {
 		m := obj(models[name])
 		settings := obj(m["settings"])
-		want := str(p.services[name])
+		want := profileServicePlacement(groups, name)
 		switch str(m["kind"]) {
 		case "audio":
 			stops, start, keep, problem := planProfileAudio(name, settings, snapshot, want)
@@ -50,70 +50,88 @@ func planProfileServices(cfg Object, p clusterProfile, snapshot Object) profileS
 			if keep != nil {
 				plan.keep = append(plan.keep, keep)
 			}
-		case "comfyui":
-			for _, node := range keys(settings) {
-				plan.addComfy(cfg, snapshot, name, node, want == node)
-			}
 		}
 	}
 
-	ocr := obj(obj(obj(obj(snapshot["nodes"])["spark01"])["containers"])["spark-ocr"])
-	ocrWanted := str(p.services["spark-ocr"]) == "spark01"
+	imageNode := profileServicePlacement(groups, "comfyui")
+	for _, node := range keys(obj(cfg["nodes"])) {
+		plan.addComfy(cfg, snapshot, node, imageNode == node)
+	}
+
+	ocrWanted := profileServicePlacement(groups, "spark-ocr") == "spark01"
+	ocrRunning := profileOCRRunning(snapshot)
 	switch {
-	case ocrWanted && boolean(ocr["running"]):
-		plan.add("keep", "spark-ocr", "spark01", "ocr")
+	case ocrWanted && ocrRunning:
+		if boolean(snapshot["ocr_ready"]) {
+			plan.add("keep", "spark-ocr", "spark01", "ocr")
+		} else {
+			plan.blockers = append(plan.blockers, "Spark OCR is running without a ready API on spark01.")
+		}
 	case ocrWanted && boolean(snapshot["ocr_installed"]):
 		plan.add("start", "spark-ocr", "spark01", "ocr")
 	case ocrWanted:
 		plan.blockers = append(plan.blockers, "Install Spark01 OCR before applying this profile.")
-	case boolean(ocr["running"]):
+	case ocrRunning:
 		plan.add("stop", "spark-ocr", "spark01", "ocr")
 	}
 	return plan
 }
 
-func (p *profileServicePlan) addComfy(cfg, snapshot Object, name, node string, wanted bool) {
+func profileOCRRunning(snapshot Object) bool {
+	containers := obj(obj(obj(snapshot["nodes"])["spark01"])["containers"])
+	return boolean(obj(containers["spark-ocr"])["running"])
+}
+
+func checkProfileOCR(snapshot Object) {
+	if profileOCRRunning(snapshot) {
+		health, err := ocrHealth(ocrHealthURL, 3*time.Second)
+		snapshot["ocr_ready"] = err == nil && str(health["service"]) == "spark-ocr"
+	}
+}
+
+func (p *profileServicePlan) addComfy(cfg, snapshot Object, node string, wanted bool) {
 	meta := obj(obj(cfg["nodes"])[node])
 	state := obj(obj(snapshot["comfyui"])[node])
 	unit := str(meta["comfy_unit"])
 	unitState := str(obj(obj(obj(snapshot["nodes"])[node])["units"])[unit])
 	reachable := boolean(state["reachable"])
-	if unit == "" && !wanted {
+	if unit == "" && !wanted && !reachable {
 		return // No engine configured on this node.
 	}
-	if wanted && unit == "" {
+	if unit == "" {
 		p.blockers = append(p.blockers, fmt.Sprintf("ComfyUI has no service unit on %s.", node))
 		return
 	}
+	stopped := unitState == "inactive" || unitState == "failed"
 	switch {
-	case wanted && reachable:
-		p.add("keep", name, node, "comfyui")
-	case wanted && contains([]string{"inactive", "failed"}, unitState):
-		p.add("start", name, node, "comfyui")
-	case !wanted && reachable && !boolean(state["executing"]) && !imageProfileBusy(state):
-		p.add("stop", name, node, "comfyui")
-	case !wanted && contains([]string{"inactive", "failed"}, unitState) && !reachable:
-		// Already stopped.
+	case wanted && reachable && unitState == "active":
+		p.add("keep", "comfyui", node, "comfyui")
+	case wanted && !reachable && stopped:
+		p.add("start", "comfyui", node, "comfyui")
+	case !wanted && unitState == "active" && !boolean(state["executing"]) && !imageProfileBusy(state):
+		p.add("stop", "comfyui", node, "comfyui")
+	case !wanted && stopped && !reachable:
+		return
 	default:
-		p.blockers = append(p.blockers, fmt.Sprintf("ComfyUI on %s is busy or its state cannot be confirmed.", node))
+		p.blockers = append(p.blockers, fmt.Sprintf("ComfyUI on %s is busy or its service state cannot be confirmed.", node))
 	}
 }
 
-func (c *Coordinator) applyProfileService(ctx context.Context, kind string, step Object) error {
+func (c *Coordinator) applyProfileService(ctx context.Context, rt *Runtime, kind string, step Object) error {
+	defer c.runtime.invalidate()
 	action := str(step["action"])
 	switch kind {
 	case "audio":
-		return c.runtime.applyProfileAudio(ctx, step)
+		return rt.applyProfileAudio(ctx, step)
 	case "ocr":
-		_, err := ManageOCR(c.runtime.root(), Object{"action": action})
-		c.runtime.invalidate()
+		_, err := ManageOCR(rt.root(), Object{"action": action})
 		return err
 	case "comfyui":
 		node := stringsOf(step["nodes"])[0]
 		if action == "stop" {
-			return c.stopProfileComfy(ctx, node)
+			return c.stopProfileComfy(ctx, rt, node)
 		}
-		return c.runtime.startComfy(ctx, node)
+		return rt.startComfy(ctx, node)
 	default:
 		return fail("Unknown profile service kind %s.", kind)
 	}
@@ -140,7 +158,7 @@ func (r *Runtime) startComfy(ctx context.Context, node string) error {
 	}
 }
 
-func (c *Coordinator) stopProfileComfy(ctx context.Context, node string) error {
+func (c *Coordinator) stopProfileComfy(ctx context.Context, rt *Runtime, node string) error {
 	// Pause admission during the final idle check and stop. The apply
 	// operation holds reconfigure, so no legacy reload can change this flag.
 	c.mu.Lock()
@@ -163,16 +181,14 @@ func (c *Coordinator) stopProfileComfy(ctx context.Context, node string) error {
 		c.signal()
 		c.mu.Unlock()
 	}()
-	state, err := c.runtime.inspectNode(ctx, node)
+	state, err := rt.inspectNode(ctx, node)
 	if err != nil {
 		return err
 	}
+	unit := str(obj(obj(rt.config()["nodes"])[node])["comfy_unit"])
 	image := obj(state["comfyui"])
-	if boolean(image["executing"]) || imageProfileBusy(image) {
+	if str(obj(state["units"])[unit]) != "active" || boolean(image["executing"]) || imageProfileBusy(image) {
 		return fail("ComfyUI on %s is busy or its state cannot be confirmed.", node)
 	}
-	meta := obj(obj(c.cfg()["nodes"])[node])
-	err = c.runtime.unit(ctx, node, "stop", str(meta["comfy_unit"]))
-	c.runtime.invalidate()
-	return err
+	return rt.unit(ctx, node, "stop", unit)
 }

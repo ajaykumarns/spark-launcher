@@ -458,7 +458,7 @@ func (c *Coordinator) snapshot(ctx context.Context, fresh bool) (Object, error) 
 	}
 	if profile := selectedProfile(c.cfg()); profile != nil {
 		if groups := arr(profile["capabilities"]); len(groups) > 0 {
-			profile["capabilities"] = c.runningProfileCapabilities(groups, obj(profile["services"]), data)
+			profile["capabilities"] = c.runningProfileCapabilities(ctx, groups, data)
 		}
 		data["profile"] = profile
 	}
@@ -726,14 +726,13 @@ func (c *Coordinator) loadInternal(ctx context.Context, requested, forceID strin
 		return nil, err
 	}
 	defer c.reconfigure.unlock()
-	return c.loadLocked(ctx, requested, forceID, override, generation, false)
-}
-
-func (c *Coordinator) loadLocked(ctx context.Context, requested, forceID, override string, generation map[string]uint64, profile bool) (Object, error) {
 	if err := c.refresh(); err != nil {
 		return nil, err
 	}
-	cfg := c.cfg()
+	return c.loadLocked(ctx, c.cfg(), requested, forceID, override, generation, false)
+}
+
+func (c *Coordinator) loadLocked(ctx context.Context, cfg Object, requested, forceID, override string, generation map[string]uint64, profile bool) (Object, error) {
 	name, m, err := resolveWorkload(cfg, requested)
 	if err != nil {
 		return nil, err
@@ -986,14 +985,13 @@ func (c *Coordinator) unload(ctx context.Context, requested string, force bool) 
 		return nil, err
 	}
 	defer c.reconfigure.unlock()
-	return c.unloadLocked(ctx, requested)
-}
-
-func (c *Coordinator) unloadLocked(ctx context.Context, requested string) (Object, error) {
 	if err := c.refresh(); err != nil {
 		return nil, err
 	}
-	cfg := c.cfg()
+	return c.unloadLocked(ctx, c.cfg(), requested)
+}
+
+func (c *Coordinator) unloadLocked(ctx context.Context, cfg Object, requested string) (Object, error) {
 	name, m, err := resolveWorkload(cfg, requested)
 	recordNodes := []string(nil)
 	if err != nil {
@@ -1574,13 +1572,19 @@ func (c *Coordinator) submitComfyPinned(cfg Object, on string, workflow Object) 
 		return "", nil, err
 	}
 	defer c.reconfigure.unlock()
+	if err := c.refresh(); err != nil {
+		return "", nil, err
+	}
+	if compactJSON(cfg) != compactJSON(c.cfg()) {
+		return "", nil, fail("The cluster configuration changed while waiting. Retry the image request.")
+	}
 	profile := selectedProfile(cfg)
 	if str(profile["error"]) != "" {
 		return "", nil, fail("Cannot read the applied profile. No workflow was submitted.")
 	}
-	services, managed := profile["services"]
+	managed := profile != nil
 	if managed {
-		selected := str(obj(services)["comfyui"])
+		selected := profileServicePlacement(arr(profile["capabilities"]), "comfyui")
 		if selected == "" {
 			return "", nil, fail("The applied profile does not include ComfyUI.")
 		}
