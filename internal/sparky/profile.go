@@ -21,6 +21,7 @@ type profileModel struct {
 
 type clusterProfile struct {
 	name         string
+	description  string
 	models       []profileModel
 	capabilities []any
 }
@@ -28,6 +29,7 @@ type clusterProfile struct {
 type profileFile struct {
 	Version  int `yaml:"version"`
 	Profiles map[string]struct {
+		Description  yaml.Node `yaml:"description"`
 		Capabilities yaml.Node `yaml:"capabilities"`
 	} `yaml:"profiles"`
 }
@@ -74,6 +76,12 @@ func (file profileFile) profile(name string, cfg Object) (clusterProfile, error)
 			names[n] = true
 		}
 		return p, fail("Unknown profile %s. Available profiles: %s", name, strings.Join(keys(names), ", "))
+	}
+	if d := entry.Description; d.Kind != 0 && d.ShortTag() != "!!null" {
+		if d.Kind != yaml.ScalarNode || d.ShortTag() != "!!str" {
+			return p, fail("The description for profile %s must be text.", name)
+		}
+		p.description = strings.TrimSpace(d.Value)
 	}
 	groups := entry.Capabilities
 	if groups.Kind != yaml.MappingNode {
@@ -157,6 +165,9 @@ func listProfiles(root string) (Object, error) {
 	for _, name := range keys(names) {
 		row := Object{"name": name}
 		p, err := file.profile(name, cfg)
+		if p.description != "" {
+			row["description"] = p.description
+		}
 		if err != nil {
 			row["error"] = err.Error()
 		} else {
@@ -186,7 +197,12 @@ func renderProfileList(data Object) string {
 		if len(groups) == 0 {
 			groups = []string{"no capabilities"}
 		}
-		fmt.Fprintf(&out, "%s — %s\n", name, strings.Join(groups, ", "))
+		groupList := strings.Join(groups, ", ")
+		if description := strings.Join(strings.Fields(str(row["description"])), " "); description != "" {
+			fmt.Fprintf(&out, "%s — %s (%s)\n", name, description, groupList)
+		} else {
+			fmt.Fprintf(&out, "%s — %s\n", name, groupList)
+		}
 	}
 	if out.Len() == 0 {
 		return "No profiles defined.\n"
@@ -360,11 +376,15 @@ func planProfile(cfg Object, p clusterProfile, snapshot Object, ready func(profi
 		}
 		routes[route.alias] = eligible
 	}
-	return Object{"profile": p.name, "status": "planned", "kept": kept, "steps": steps,
+	result := Object{"profile": p.name, "status": "planned", "kept": kept, "steps": steps,
 		"blockers": blockers, "blocked": len(blockers) > 0, "expected_routes": routes,
 		"capabilities": profileAvailability(p.capabilities, func(provider Object) bool {
 			return profileProviderKept(kept, provider)
 		})}
+	if p.description != "" {
+		result["description"] = p.description
+	}
+	return result
 }
 
 func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Object, error) {
@@ -425,7 +445,7 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 		return nil, err
 	}
 	result["plan_id"] = fmt.Sprintf("%x", sha256.Sum256(jsonBytes(Object{
-		"name": name, "config": cfg, "providers": p.capabilities, "steps": result["steps"],
+		"name": name, "description": p.description, "config": cfg, "providers": p.capabilities, "steps": result["steps"],
 	})))
 	if !apply || boolean(result["blocked"]) {
 		return result, nil
@@ -501,7 +521,11 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 	if err := checkConfig(); err != nil {
 		return failed(err)
 	}
-	if err := writeObject(profileStatePath(cfg), Object{"name": name, "applied_at": time.Now().UTC(), "capabilities": p.capabilities}); err != nil {
+	state := Object{"name": name, "applied_at": time.Now().UTC(), "capabilities": p.capabilities}
+	if p.description != "" {
+		state["description"] = p.description
+	}
+	if err := writeObject(profileStatePath(cfg), state); err != nil {
 		return failed(fail("Could not save the selected profile: %v", err))
 	}
 	result["status"], result["completed"] = "applied", completed
@@ -568,6 +592,9 @@ func profileCapabilitySummary(groups []any) string {
 func renderProfile(result Object) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "Profile %s (%s)\n", str(result["profile"]), str(result["status"]))
+	if description := strings.Join(strings.Fields(str(result["description"])), " "); description != "" {
+		fmt.Fprintln(&out, description)
+	}
 	if groups := arr(result["capabilities"]); len(groups) > 0 {
 		if str(result["status"]) == "failed" {
 			out.WriteString("Capabilities before apply\n")

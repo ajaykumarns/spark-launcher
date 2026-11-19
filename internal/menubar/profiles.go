@@ -41,6 +41,9 @@ func (c *Controller) Profiles(ctx context.Context) ([]Choice, error) {
 			groups = append(groups, cap.Name)
 		}
 		label := name
+		if description := strings.Join(strings.Fields(str(row["description"])), " "); description != "" {
+			label += " — " + description
+		}
 		if len(groups) > 0 {
 			label += " · " + strings.Join(groups, ", ")
 		}
@@ -74,6 +77,9 @@ func (c *Controller) PlanProfile(ctx context.Context, name string) (ProfilePlan,
 	}
 	if len(lines) == 0 {
 		lines = append(lines, "No workloads will start, stop, or restart.")
+	}
+	if description := strings.TrimSpace(str(data["description"])); description != "" {
+		lines = append([]string{description, ""}, lines...)
 	}
 	return ProfilePlan{ID: id, Details: strings.Join(lines, "\n")}, nil
 }
