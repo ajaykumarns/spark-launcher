@@ -325,6 +325,16 @@ func cliDispatch(ctx context.Context, cfg clientConfig, inv *cliInvocation, in i
 		}
 		cliEmitView(inv, out, data, cliRender(inv, out, "plan", data))
 		return 0
+	case "profile":
+		data, err := cliRemoteRPC(ctx, cfg, "profile-"+inv.Positional[0], Object{"name": inv.Positional[1]})
+		if err != nil {
+			return cliErrorExit(inv, cliInterruptErr(ctx, err), out, errout)
+		}
+		cliEmitView(inv, out, data, renderProfile(data))
+		if boolean(data["blocked"]) || str(data["status"]) == "failed" {
+			return 1
+		}
+		return 0
 	case "image-profile":
 		data, err := cliRemoteRPC(ctx, cfg, "image-profile", Object{
 			"mode": cliPositionalOr(inv, "mode", "show"), "dry_run": inv.Flags["dry-run"]})

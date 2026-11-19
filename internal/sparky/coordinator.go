@@ -456,6 +456,9 @@ func (c *Coordinator) snapshot(ctx context.Context, fresh bool) (Object, error) 
 		data["decision_auto_routing"] = copyObject(c.decisionAutoPool)
 		c.mu.Unlock()
 	}
+	if profile := selectedProfile(c.cfg()); profile != nil {
+		data["profile"] = profile
+	}
 	data["config_path"] = c.path
 	return data, nil
 }
@@ -720,6 +723,10 @@ func (c *Coordinator) loadInternal(ctx context.Context, requested, forceID strin
 		return nil, err
 	}
 	defer c.reconfigure.unlock()
+	return c.loadLocked(ctx, requested, forceID, override, generation, false)
+}
+
+func (c *Coordinator) loadLocked(ctx context.Context, requested, forceID, override string, generation map[string]uint64, profile bool) (Object, error) {
 	if err := c.refresh(); err != nil {
 		return nil, err
 	}
@@ -862,6 +869,9 @@ func (c *Coordinator) loadInternal(ctx context.Context, requested, forceID strin
 		if other != name && rt.native() && boolean(s["shared_device"]) && boolean(row["shared_device"]) && str(row["state"]) == StateReady {
 			continue
 		}
+		if profile {
+			return nil, fail("%s changed since the profile was planned. No additional model was stopped.", other)
+		}
 		if other == name && rt.native() && rt.adoptSelf(operationCtx, name, m, s, nodes, placement) {
 			// The model's own durable record already matches the selected
 			// recipe, placement, nodes and topology: adopt the SAME
@@ -973,6 +983,10 @@ func (c *Coordinator) unload(ctx context.Context, requested string, force bool) 
 		return nil, err
 	}
 	defer c.reconfigure.unlock()
+	return c.unloadLocked(ctx, requested)
+}
+
+func (c *Coordinator) unloadLocked(ctx context.Context, requested string) (Object, error) {
 	if err := c.refresh(); err != nil {
 		return nil, err
 	}

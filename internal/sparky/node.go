@@ -168,7 +168,7 @@ func controllerRequest(ctx context.Context, root, operation string, payload any)
 		return nil, fail("The cluster file has no usable controller port.")
 	}
 	timeout := 120 * time.Second
-	if operation == "load" || operation == "unload" {
+	if operation == "load" || operation == "unload" || operation == "profile-apply" {
 		timeout = 7200 * time.Second
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/control/%s", port, operation)
@@ -427,7 +427,7 @@ func NodeMain(args []string, in io.Reader) (any, error) {
 		}
 		operation := positional[0]
 		switch operation {
-		case "plan", "config", "placement", "run", "validate", "image-profile":
+		case "plan", "config", "placement", "run", "validate", "image-profile", "profile-plan", "profile-apply":
 		default:
 			return nil, usagef("Unknown rpc operation: %s.", operation)
 		}
