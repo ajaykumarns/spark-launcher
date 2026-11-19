@@ -42,7 +42,15 @@ func TestProfileApplyNativeLifecycle(t *testing.T) {
 	if _, err := os.Stat(profileStatePath(c.cfg())); !os.IsNotExist(err) {
 		t.Fatalf("preview saved a selection: %v", err)
 	}
-	applied, err := c.Profile("single", true)
+	if _, err := c.Profile("single", true, "stale-preview"); err == nil || env.rankStartsTotal() != 0 {
+		t.Fatalf("a stale plan ID must block before starting a workload: %v", err)
+	}
+	listed, err := listProfiles(env.root)
+	if err != nil || len(arr(listed["profiles"])) != 3 || str(listed["selected"]) != "" {
+		t.Fatalf("list should show configured profiles without applying them: %v, %v", listed, err)
+	}
+
+	applied, err := c.Profile("single", true, str(preview["plan_id"]))
 	if err != nil || str(applied["status"]) != "applied" || env.rankStartsTotal() != 1 {
 		t.Fatalf("apply should load one rank: %v, %v", applied, err)
 	}
@@ -71,6 +79,11 @@ func TestProfileApplyNativeLifecycle(t *testing.T) {
 	}
 	if str(selectedProfile(c.cfg())["name"]) != "single" {
 		t.Fatal("successful apply did not save the profile")
+	}
+
+	listed, err = listProfiles(env.root)
+	if err != nil || str(listed["selected"]) != "single" {
+		t.Fatalf("list should show the last applied profile: %v, %v", listed, err)
 	}
 
 	preview, err = c.Profile("dual", false)

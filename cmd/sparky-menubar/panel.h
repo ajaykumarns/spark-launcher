@@ -57,4 +57,6 @@ int sparky_probe_choice_count(void);
 char *sparky_probe_picker_caption(void);
 char *sparky_probe_layout(int picking);
 
+int sparky_confirm_profile(const char *name, const char *plan);
+
 #endif

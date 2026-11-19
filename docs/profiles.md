@@ -26,9 +26,13 @@ profiles:
         - spark-ocr: spark01
 ```
 
-Use `sparky profile plan everyday` to preview the switch. Use
-`sparky profile apply everyday` to apply it. Both commands accept
-`--json`. Profiles require the native lifecycle.
+Use `sparky profile list` to list profiles and their capabilities. Use
+`sparky profile plan everyday` to preview the switch. Use
+`sparky profile apply everyday` to apply it. All three commands accept
+`--json`. Pass the plan's JSON `plan_id` to
+`sparky profile apply everyday --expect-plan ID` to refuse a changed plan.
+The menu bar does this when you confirm a switch. Profiles require the
+native lifecycle.
 
 The planner keeps a model when its placement and running recipe match and
 Sparky confirms readiness. It stops loaded models outside the profile.

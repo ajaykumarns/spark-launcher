@@ -483,7 +483,8 @@ report and exit `1`.
 
 A native status icon opens a standard macOS menu: Sparky and the current state, the
 real loaded model and placement, in-use / total memory per Spark, active
-requests, a Load model submenu, Refresh status, and the last update time.
+requests, and the last update time. The Switch profile submenu lists profiles
+by capability and shows the plan before it applies a change.
 Settings holds start-at-login, show-title, and diagnostics. Quit is a main menu item.
 
 ![Sparky native macOS menu showing the active model, per-device memory, and Settings submenu](docs/images/sparky-menu.png)

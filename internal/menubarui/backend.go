@@ -6,6 +6,6 @@ import (
 
 // NewController builds the real backend controller for a resolved absolute
 // CLI path.
-func NewController(binary string) Controller {
+func NewController(binary string) ProfileController {
 	return menubar.NewController(binary)
 }

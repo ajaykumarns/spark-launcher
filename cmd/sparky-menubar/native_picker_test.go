@@ -31,11 +31,11 @@ func nativePickerCase() error {
 
 	labels := []string{"Spark Auto", "DeepSeek V3", "GLM 4.6"}
 	ids := []string{"spark-auto", "deepseek-v3", "glm-4.6"}
-	panelSetPicker(true, "Choose a model to load", labels, ids)
+	panelSetPicker(true, "Select a profile", labels, ids)
 	if rows := probeChoiceRows(); rows != len(labels) {
 		return fmt.Errorf("initial picker rows = %d, want %d", rows, len(labels))
 	}
-	if caption := probePickerCaption(); caption != "Choose a model to load" {
+	if caption := probePickerCaption(); caption != "Select a profile" {
 		return fmt.Errorf("initial picker caption = %q", caption)
 	}
 
@@ -43,13 +43,13 @@ func nativePickerCase() error {
 	// is where the original crash occurred.
 	replacement := []string{"Spark Auto", "Kimi K2"}
 	replacementIDs := []string{"spark-auto", "kimi-k2"}
-	panelSetPicker(true, "Choose a model to load", replacement, replacementIDs)
+	panelSetPicker(true, "Select a profile", replacement, replacementIDs)
 	if rows := probeChoiceRows(); rows != len(replacement) {
 		return fmt.Errorf("replacement rows = %d, want %d", rows, len(replacement))
 	}
 
 	// Identical catalog must not rebuild (keeps keyboard focus); rows stay.
-	panelSetPicker(true, "Choose a model to load", replacement, replacementIDs)
+	panelSetPicker(true, "Select a profile", replacement, replacementIDs)
 	if rows := probeChoiceRows(); rows != len(replacement) {
 		return fmt.Errorf("identical-catalog rows = %d, want %d", rows, len(replacement))
 	}
@@ -67,7 +67,7 @@ func nativePickerCase() error {
 	if code := probeBuildPanel(); code != 0 {
 		return fmt.Errorf("probe after overview return failed (code %d)", code)
 	}
-	panelSetPicker(false, "Choose a model to load", replacement, replacementIDs)
+	panelSetPicker(false, "Select a profile", replacement, replacementIDs)
 	if rows := probeChoiceRows(); rows != len(replacement) {
 		return fmt.Errorf("overview-mode rows = %d, want %d", rows, len(replacement))
 	}
@@ -89,7 +89,7 @@ func nativeLayoutCase() error {
 	panelSetContent(panelStrings{
 		HeaderTitle: "Sparky", HeaderState: "Ready", ModelCaption: "Language model",
 		ModelName: "deepseek-v4.1-flash-1017", ModelLocation: "Ready on Spark 1 + Spark 2",
-		MemoryCaption: "Device memory · in use / total", LoadLabel: "Load model…",
+		MemoryCaption: "Device memory · in use / total", LoadLabel: "Switch profile…",
 		RefreshLabel: "Refresh status", Footer: "Updated just now",
 	})
 	panelSetMemoryRows([]panelPair{{"Spark 1", "114.6 / 121.7 GiB"}, {"Spark 2", "115.4 / 121.7 GiB"}})
@@ -97,7 +97,7 @@ func nativeLayoutCase() error {
 	if err := probeLayout(false); err != "" {
 		return fmt.Errorf("overview: %s", err)
 	}
-	panelSetPicker(true, "Run through the Sparky CLI", []string{"DeepSeek", strings.Repeat("Long model name ", 8)}, []string{"deepseek", "long"})
+	panelSetPicker(true, "Select a profile", []string{"DeepSeek", strings.Repeat("Long model name ", 8)}, []string{"deepseek", "long"})
 	if err := probeLayout(true); err != "" {
 		return fmt.Errorf("picker: %s", err)
 	}

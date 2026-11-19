@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 	"sync"
@@ -49,17 +50,18 @@ type menuApp struct {
 	cliErr  error
 	lock    *menubarui.Lock
 
-	ctrl   menubarui.Controller
+	ctrl   menubarui.ProfileController
 	poller *menubarui.Poller
 	load   menubarui.LoadTracker
 
-	uiMu        sync.Mutex
-	done        bool // set when presentation must stop changing
-	prefs       menubarui.Prefs
-	loadMenu    menubarui.CatalogCache
-	catalogBusy bool
-	catalogErr  string // short friendly text of the last failed catalog fetch
-	picking     bool
+	uiMu          sync.Mutex
+	done          bool // set when presentation must stop changing
+	prefs         menubarui.Prefs
+	profiles      []menubarui.Choice
+	profileResult string
+	catalogBusy   bool
+	catalogErr    string // short friendly text of the last failed catalog fetch
+	picking       bool
 
 	forceRender chan struct{}
 	stopUI      chan struct{}
@@ -94,7 +96,7 @@ func (a *menuApp) onReady() {
 	}
 	a.poller.Start()
 	a.refreshAsync()
-	a.loadCatalogAsync()
+	a.loadProfilesAsync()
 }
 
 // watchShutdown lets the UI loops stop promptly when quit is clicked. It never
@@ -136,21 +138,33 @@ func (a *menuApp) renderLocked() {
 	// Merge accepted-load state immediately, before the backend goroutine has
 	// updated Snapshot.Loading. This closes the acceptance gap that would
 	// otherwise briefly re-enable Load and show no progress.
-	model, running := a.load.Running()
+	profile, running := a.load.Running()
 	snap = menubarui.MergeAcceptedLoad(snap, running)
 	if running {
 		// The tracker is the authoritative local timing for an accepted load.
 		// Always show its elapsed time, together with a concise message naming
 		// the target model; never invent stages or percentages.
-		snap.LoadMessage = menubarui.LoadProgressText(snap, model, a.load.Elapsed())
+		snap.LoadMessage = fmt.Sprintf("Profile %s · %s", profile, a.load.Elapsed().Round(time.Second))
 	} else if snap.Loading && snap.LoadMessage == "" {
 		snap.LoadMessage = "Loading a model…"
 	}
 
-	choices := a.loadMenu.Choices()
-	v := menubarui.BuildPanel(snap, a.prefs, choices, a.picking, a.ctrl != nil)
-	if a.picking {
-		v.PickerCaption = a.pickerCaption()
+	v := menubarui.BuildPanel(snap, a.prefs, nil, a.picking, a.ctrl != nil)
+	if running {
+		v.HeaderState = "Switching profile"
+	} else {
+		v.LoadResult = a.profileResult
+	}
+	v.PickerCaption = a.pickerCaption()
+	if a.catalogErr == "" {
+		for _, choice := range a.profiles {
+			label := choice.Name
+			if choice.ID == snap.ProfileName {
+				label += " (last applied)"
+			}
+			v.Choices = append(v.Choices, label)
+			v.ChoiceIDs = append(v.ChoiceIDs, choice.ID)
+		}
 	}
 
 	panelSetContent(panelStrings{
@@ -188,8 +202,18 @@ func (a *menuApp) renderLocked() {
 // pickerCaption is the short status line above the choices: loading, empty,
 // error, or default instructions. Must be called with uiMu held.
 func (a *menuApp) pickerCaption() string {
-	return menubarui.PickerCaptionText(a.ctrl != nil, a.catalogBusy,
-		a.loadMenu.Loaded(), len(a.loadMenu.Choices()), a.catalogErr)
+	switch {
+	case a.catalogErr != "":
+		return "Profile list unavailable: " + a.catalogErr
+	case a.catalogBusy && a.profiles == nil:
+		return "Loading profiles…"
+	case a.profiles == nil:
+		return "Waiting for the profile list"
+	case len(a.profiles) == 0:
+		return "No valid profiles. Run sparky profile list."
+	default:
+		return "Select a profile"
+	}
 }
 
 // loopRender redraws on a cheap tick and on explicit requests. It never
@@ -250,7 +274,7 @@ func (a *menuApp) panelOpened() {
 // panelRefresh is the Refresh status row / manual refresh.
 func (a *menuApp) panelRefresh() {
 	a.refreshAsync()
-	a.loadCatalogAsync()
+	a.loadProfilesAsync()
 	a.requestRender()
 }
 
@@ -273,7 +297,7 @@ func (a *menuApp) panelPickerOpen() {
 	}
 	a.picking = true
 	a.uiMu.Unlock()
-	a.loadCatalogAsync()
+	a.loadProfilesAsync()
 	a.requestRender()
 }
 
@@ -289,46 +313,55 @@ func (a *menuApp) panelPickerClose() {
 	a.requestRender()
 }
 
-// panelChoose accepts one model click atomically with quit, then runs the
-// accepted load on a background goroutine. The picker closes on accept and on
-// refusal. No accepted load is cancelled.
+// panelChoose reserves one switch and previews the changes off the UI thread.
 func (a *menuApp) panelChoose(id string) {
 	a.uiMu.Lock()
-	if a.done {
+	if a.done || a.ctrl == nil || a.catalogErr != "" {
 		a.uiMu.Unlock()
 		return
 	}
-	a.picking = false // close regardless of outcome
-	accepted := id != "" && a.ctrl != nil && menubarui.Accept(&a.load, id)
+	a.picking = false
+	accepted := false
+	for _, choice := range a.profiles {
+		if choice.ID == id {
+			accepted = a.load.Start(id)
+			break
+		}
+	}
+	if accepted {
+		a.profileResult = ""
+	}
 	a.uiMu.Unlock()
 	if accepted {
-		go func(model string) {
-			menubarui.Run(a.ctrl, &a.load, model)
-		}(id)
-		go a.watchLoadDone(id)
+		go a.switchProfile(id)
 	}
-	// Render synchronously so the tracker state is on screen before any
-	// background snapshot update can race in and re-enable Load.
 	a.render()
 }
 
-// watchLoadDone refreshes the reported state when a load finishes.
-func (a *menuApp) watchLoadDone(id string) {
-	waitLoadDone(&a.load, id)
-	if !a.uiAlive() {
+func (a *menuApp) switchProfile(name string) {
+	var result string
+	var err error
+	defer func() {
+		a.uiMu.Lock()
+		if err != nil {
+			result = menubarui.FriendlyError(err)
+		}
+		a.profileResult = result
+		a.load.Finish(err)
+		a.uiMu.Unlock()
+		a.requestRender()
+		a.refreshAsync()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	plan, err := a.ctrl.PlanProfile(ctx, name)
+	cancel()
+	if err != nil || !a.uiAlive() || !panelConfirmProfile(name, plan.Details) || !a.uiAlive() {
 		return
 	}
-	a.requestRender()
-	a.refreshAsync()
-}
-
-func waitLoadDone(t *menubarui.LoadTracker, id string) {
-	tick := time.NewTicker(100 * time.Millisecond)
-	defer tick.Stop()
-	for range tick.C {
-		if !t.RunningModel(id) {
-			return
-		}
+	err = a.ctrl.ApplyProfile(context.Background(), name, plan.ID)
+	if err == nil {
+		result = "Applied profile " + name
 	}
 }
 
@@ -391,7 +424,7 @@ func (a *menuApp) panelCopyDiagnostics() {
 		}
 		text := menubarui.DiagnosticsText(d)
 		if catalogErr != "" {
-			text += "Catalog: unavailable (" + catalogErr + ")\n"
+			text += "Profile list unavailable (" + catalogErr + ")\n"
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), pbcopyBound)
 		defer cancel()
@@ -401,9 +434,9 @@ func (a *menuApp) panelCopyDiagnostics() {
 	}()
 }
 
-// loadCatalogAsync coalesces fetches and records failures so the picker and
+// loadProfilesAsync coalesces fetches and records failures so the picker and
 // diagnostics can show a real error instead of a silent empty list.
-func (a *menuApp) loadCatalogAsync() {
+func (a *menuApp) loadProfilesAsync() {
 	a.uiMu.Lock()
 	if a.ctrl == nil || a.done || a.catalogBusy {
 		a.uiMu.Unlock()
@@ -411,16 +444,19 @@ func (a *menuApp) loadCatalogAsync() {
 	}
 	a.catalogBusy = true
 	a.uiMu.Unlock()
-	a.requestRender() // show "Loading model list…"
+	a.requestRender()
 
 	go func() {
-		err := menubarui.FetchCatalog(context.Background(), a.ctrl, &a.loadMenu, catalogBound)
+		ctx, cancel := context.WithTimeout(context.Background(), catalogBound)
+		defer cancel()
+		profiles, err := a.ctrl.Profiles(ctx)
 		a.uiMu.Lock()
 		a.catalogBusy = false
 		done := a.done
 		if err != nil {
 			a.catalogErr = menubarui.FriendlyError(err)
 		} else {
+			a.profiles = profiles
 			a.catalogErr = ""
 		}
 		a.uiMu.Unlock()

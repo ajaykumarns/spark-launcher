@@ -23,7 +23,7 @@ type PanelView struct {
 	MemoryRows    []PanelPair
 	RequestsRow   PanelPair
 
-	LoadRowLabel    string // "Load model…"
+	LoadRowLabel    string // "Switch profile…"
 	RefreshRowLabel string // "Refresh status"
 	Footer          string
 
@@ -56,7 +56,7 @@ func BuildPanel(s menubar.Snapshot, prefs Prefs, choices []Choice, picking bool,
 		HeaderTitle:     "Sparky",
 		ModelCaption:    "Language model",
 		MemoryCaption:   "Device memory · in use / total",
-		LoadRowLabel:    "Load model…",
+		LoadRowLabel:    "Switch profile…",
 		RefreshRowLabel: "Refresh status",
 		PickerCaption:   "Run through the Sparky CLI",
 		HasCLI:          hasCLI,
@@ -96,6 +96,47 @@ func BuildPanel(s menubar.Snapshot, prefs Prefs, choices []Choice, picking bool,
 	} else {
 		v.ModelName = "Unknown"
 		v.ModelLocation = "Current model state is unavailable"
+	}
+
+	if s.ProfileName != "" {
+		v.ModelName = "Profile: " + s.ProfileName
+		v.ModelLocation = "Last applied"
+		v.ExtraModels = nil
+		if !connected {
+			v.ModelLocation = "Last applied · live status unavailable"
+		} else {
+			for _, capability := range s.Capabilities {
+				state := capability.State
+				switch state {
+				case "available", "partial", "unavailable":
+				default:
+					state = "unknown"
+				}
+				v.ExtraModels = append(v.ExtraModels, title(capability.Name)+" · "+state)
+			}
+		}
+		if connected && !s.Loading && !transitioning {
+			available := 0
+			partial := false
+			for _, c := range s.Capabilities {
+				switch c.State {
+				case "available":
+					available++
+				case "partial":
+					partial = true
+				}
+			}
+			switch {
+			case len(s.Capabilities) == 0:
+				v.HeaderState = "Idle"
+			case available == len(s.Capabilities):
+				v.HeaderState = "Ready"
+			case available > 0 || partial:
+				v.HeaderState = "Partial"
+			default:
+				v.HeaderState = "Unavailable"
+			}
+		}
 	}
 
 	v.MemoryRows = memoryRows(s, connected)

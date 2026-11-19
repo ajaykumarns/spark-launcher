@@ -129,12 +129,12 @@ static NSMenuItem *Info(SparkyInfoRow *row) {
     if ((self = [super init])) {
         self.menu = NewMenu(@"Sparky");
         self.menu.minimumWidth = 300;
-        self.models = NewMenu(@"Load model");
+        self.models = NewMenu(@"Switch profile");
         self.settings = NewMenu(@"Settings");
         self.menu.delegate = self;
         self.models.delegate = self;
         self.extras = @[]; self.memoryLabels = @[]; self.memoryValues = @[];
-        self.choiceLabels = @[]; self.choiceIDs = @[]; self.pickerCaption = @"Loading model list…";
+        self.choiceLabels = @[]; self.choiceIDs = @[]; self.pickerCaption = @"Loading profiles…";
         self.header = [[SparkyInfoRow alloc] initSmall:NO strong:YES pair:NO];
         self.model = [[SparkyInfoRow alloc] initSmall:NO strong:YES pair:NO];
         self.location = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
@@ -145,7 +145,7 @@ static NSMenuItem *Info(SparkyInfoRow *row) {
         self.catalogState = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
         [self.header setLeft:@"Sparky" right:@"Unknown"];
         [self.model setLeft:@"Waiting for status" right:@""];
-        self.loadItem = Action(@"Load model…", NULL, nil, @"");
+        self.loadItem = Action(@"Switch profile…", NULL, nil, @"");
         self.loadItem.submenu = self.models;
         self.refreshItem = Action(@"Refresh status", @selector(refresh:), self, @"");
         self.quitItem = Action(@"Quit Sparky", @selector(quit:), self, @"q");
@@ -197,11 +197,10 @@ static NSMenuItem *Info(SparkyInfoRow *row) {
 }
 - (void)buildModels {
     [self.models removeAllItems];
-    NSString *caption = [self.pickerCaption isEqualToString:@"Run through the Sparky CLI"]
-                        ? @"Select a model" : self.pickerCaption;
+    NSString *caption = self.pickerCaption;
     [self.catalogState setLeft:caption right:@""];
     self.catalogItem = Info(self.catalogState);
-    self.catalogItem.hidden = self.choiceIDs.count && [self.pickerCaption isEqualToString:@"Run through the Sparky CLI"];
+    self.catalogItem.hidden = self.choiceIDs.count && [self.pickerCaption isEqualToString:@"Select a profile"];
     [self.models addItem:self.catalogItem];
     for (NSUInteger i = 0; i < self.choiceIDs.count; i++) {
         NSMenuItem *item = Action(self.choiceLabels[i], @selector(choose:), self, @"");
@@ -340,8 +339,8 @@ void sparky_set_picker(int picking, const char *caption, const char **labels, co
         SparkyMenuController *c = Controller();
         BOOL changed = ![c.choiceLabels isEqualToArray:l] || ![c.choiceIDs isEqualToArray:v];
         c.pickerCaption=cap; c.choiceLabels=l; c.choiceIDs=v;
-        [c.catalogState setLeft:[cap isEqualToString:@"Run through the Sparky CLI"] ? @"Select a model" : cap right:@""];
-        c.catalogItem.hidden = v.count && [cap isEqualToString:@"Run through the Sparky CLI"];
+        [c.catalogState setLeft:cap right:@""];
+        c.catalogItem.hidden = v.count && [cap isEqualToString:@"Select a profile"];
         if (changed) { c.modelsDirty=YES; if (!c.modelTracking) [c buildModels]; }
     });
 }
@@ -403,4 +402,24 @@ char *sparky_probe_layout(int picking) {
     CFRunLoopRunInMode((__bridge CFStringRef)NSEventTrackingRunLoopMode, 0.03, false);
     if (!updated) return strdup("status updates stalled in native menu tracking mode");
     return NULL;
+}
+
+int sparky_confirm_profile(const char *name, const char *plan) {
+    NSString *title = [NSString stringWithFormat:@"Switch to %@?", Str(name)];
+    NSString *details = Str(plan);
+    __block int confirmed = 0;
+    dispatch_block_t show = ^{
+        [NSApp activateIgnoringOtherApps:YES];
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = title;
+        alert.informativeText = details;
+        [alert addButtonWithTitle:@"Switch Profile"];
+        [alert addButtonWithTitle:@"Cancel"];
+        alert.buttons[0].keyEquivalent = @"";
+        alert.buttons[1].keyEquivalent = @"\r";
+        confirmed = [alert runModal] == NSAlertFirstButtonReturn;
+    };
+    if (NSThread.isMainThread) show();
+    else dispatch_sync(dispatch_get_main_queue(), show);
+    return confirmed;
 }

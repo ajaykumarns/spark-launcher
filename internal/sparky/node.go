@@ -427,7 +427,7 @@ func NodeMain(args []string, in io.Reader) (any, error) {
 		}
 		operation := positional[0]
 		switch operation {
-		case "plan", "config", "placement", "run", "validate", "image-profile", "profile-plan", "profile-apply":
+		case "plan", "config", "placement", "run", "validate", "image-profile", "profile-list", "profile-plan", "profile-apply":
 		default:
 			return nil, usagef("Unknown rpc operation: %s.", operation)
 		}
@@ -541,6 +541,9 @@ func NodeMain(args []string, in io.Reader) (any, error) {
 
 // nodeRPC mirrors the rpc branch of cli.py node_action.
 func nodeRPC(ctx context.Context, root, operation string, payload Object) (any, error) {
+	if operation == "profile-list" {
+		return listProfiles(root)
+	}
 	if operation == "image-profile" {
 		mode := str(payload["mode"])
 		if mode == "" {

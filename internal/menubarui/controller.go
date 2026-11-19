@@ -19,6 +19,13 @@ type Controller interface {
 	Load(context.Context, string) error
 }
 
+type ProfileController interface {
+	Controller
+	Profiles(context.Context) ([]menubar.Choice, error)
+	PlanProfile(context.Context, string) (menubar.ProfilePlan, error)
+	ApplyProfile(context.Context, string, string) error
+}
+
 // Re-exported backend types so the app wires directly to the shared API.
 type (
 	Snapshot     = menubar.Snapshot

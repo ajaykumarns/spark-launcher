@@ -35,11 +35,13 @@ type Choice struct {
 // accepted until its result has been recorded. LoadError/LoadMessage carry
 // the last load outcome.
 type Snapshot struct {
-	Models      []ModelStatus
-	Devices     []DeviceStatus
-	UpdatedAt   time.Time
-	Error       string
-	Loading     bool
-	LoadError   string
-	LoadMessage string
+	ProfileName  string
+	Capabilities []ProfileCapability
+	Models       []ModelStatus
+	Devices      []DeviceStatus
+	UpdatedAt    time.Time
+	Error        string
+	Loading      bool
+	LoadError    string
+	LoadMessage  string
 }
