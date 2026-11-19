@@ -110,6 +110,7 @@ func (c *Controller) Refresh(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	c.snap.ProfileName = parsed.ProfileName
+	c.snap.ProfileDescription = parsed.ProfileDescription
 	c.snap.Capabilities = parsed.Capabilities
 	c.snap.Models = parsed.Models
 	c.snap.Devices = parsed.Devices

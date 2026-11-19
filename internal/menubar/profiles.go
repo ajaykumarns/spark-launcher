@@ -37,10 +37,11 @@ func (c *Controller) Profiles(ctx context.Context) ([]Choice, error) {
 			continue // The CLI list reports the validation error.
 		}
 		label := name
-		if description := strings.Join(strings.Fields(str(row["description"])), " "); description != "" {
+		description := strings.Join(strings.Fields(str(row["description"])), " ")
+		if description != "" {
 			label += " — " + description
 		}
-		choices = append(choices, Choice{ID: name, Name: label})
+		choices = append(choices, Choice{ID: name, Name: label, Description: description})
 	}
 	return choices, nil
 }

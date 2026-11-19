@@ -8,8 +8,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"sparky/internal/menubarui"
 )
 
 // AppKit view objects must be built on the process main OS thread, exactly like
@@ -96,21 +94,22 @@ func TestMain(m *testing.M) {
 }
 
 func nativeLayoutCase() error {
-	panelSetContent(panelStrings{
+	content := panelStrings{
 		HeaderTitle: "Sparky", HeaderState: "Ready", ModelCaption: "Language model",
-		ModelName: "deepseek-v4.1-flash-1017", ModelLocation: "Ready on Spark 1 + Spark 2",
+		ModelName: "Profile: daily", ModelLocation: "Chat and transcription",
 		MemoryCaption: "Device memory · in use / total", LoadLabel: "Switch Profile",
 		RefreshLabel: "Refresh status", Footer: "Updated just now",
-	})
+	}
+	panelSetContent(content)
 	panelSetMemoryRows([]panelPair{{"Spark 1", "114.6 / 121.7 GiB"}, {"Spark 2", "115.4 / 121.7 GiB"}})
 	panelSetRequests("Active requests", "0")
-	panelSetCapabilities([]menubarui.PanelPair{
-		{Label: "chat", Value: "available"}, {Label: "decisions", Value: "partial"},
-		{Label: "transcription", Value: "available"}, {Label: "speech", Value: "available"},
-		{Label: "images", Value: "unavailable"}, {Label: "ocr", Value: "available"},
-	})
-	if count := probeCapabilityCount(); count != 6 {
-		return fmt.Errorf("capability icons = %d, want six labeled icons", count)
+	if subtitle := probeSubtitle(); subtitle != "Chat and transcription" {
+		return fmt.Errorf("profile subtitle = %q", subtitle)
+	}
+	content.ModelLocation = ""
+	panelSetContent(content)
+	if subtitle := probeSubtitle(); subtitle != "" {
+		return fmt.Errorf("optional subtitle should be hidden, got %q", subtitle)
 	}
 	if err := probeLayout(false); err != "" {
 		return fmt.Errorf("overview: %s", err)

@@ -29,7 +29,6 @@ void sparky_set_panel(const char *headerTitle, const char *headerState,
 
 // Extra loaded LLM lines (0..n), and device memory rows.
 void sparky_set_extra_models(const char **lines, int count);
-void sparky_set_capabilities(const char **names, const char **states, int count);
 void sparky_set_memory_rows(const char **labels, const char **values, int count);
 void sparky_set_requests(const char *label, const char *value);
 
@@ -57,7 +56,7 @@ int sparky_probe_build_panel(void);
 int sparky_probe_choice_count(void);
 char *sparky_probe_picker_caption(void);
 char *sparky_probe_selected_profile(void);
-int sparky_probe_capability_count(void);
+char *sparky_probe_subtitle(void);
 char *sparky_probe_layout(int picking);
 
 int sparky_confirm_profile(const char *name, const char *plan);

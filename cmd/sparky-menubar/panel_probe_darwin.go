@@ -59,4 +59,11 @@ func probeSelectedProfile() string {
 	return C.GoString(p)
 }
 
-func probeCapabilityCount() int { return int(C.sparky_probe_capability_count()) }
+func probeSubtitle() string {
+	p := C.sparky_probe_subtitle()
+	if p == nil {
+		return ""
+	}
+	defer C.free(unsafe.Pointer(p))
+	return C.GoString(p)
+}

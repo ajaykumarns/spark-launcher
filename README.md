@@ -483,7 +483,8 @@ report and exit `1`.
 
 A native status icon opens a standard macOS menu: Sparky and the current state, the
 real loaded model and placement, in-use / total memory per Spark, active
-requests, and the last update time. The main menu shows live capability icons.
+requests, and the last update time. The selected profile name and optional
+description appear at the top of the menu.
 The Switch Profile submenu lists profile names and descriptions. It marks the
 selected profile and shows the plan before it applies a change.
 Settings holds start-at-login, show-title, and diagnostics. Quit is a main menu item.

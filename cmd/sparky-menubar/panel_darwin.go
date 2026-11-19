@@ -13,8 +13,6 @@ import "C"
 
 import (
 	"unsafe"
-
-	"sparky/internal/menubarui"
 )
 
 // cstr returns a C string for s. Callers must free it with C.free.
@@ -82,16 +80,6 @@ func panelSetExtraModels(lines []string) {
 	list, n := cstrSlice(lines)
 	defer freeC(list)
 	C.sparky_set_extra_models(cArray(list), n)
-}
-
-func panelSetCapabilities(rows []menubarui.PanelPair) {
-	names, states := make([]*C.char, len(rows)), make([]*C.char, len(rows))
-	for i, row := range rows {
-		names[i], states[i] = cstr(row.Label), cstr(row.Value)
-	}
-	defer freeC(names)
-	defer freeC(states)
-	C.sparky_set_capabilities(cArray(names), cArray(states), C.int(len(rows)))
 }
 
 func panelSetMemoryRows(pairs []panelPair) {

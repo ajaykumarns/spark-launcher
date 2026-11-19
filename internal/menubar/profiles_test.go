@@ -21,7 +21,7 @@ func TestProfileCommandsRequireReviewedPlan(t *testing.T) {
 	ctrl := newController("/sparky", f.runner())
 	ctx := context.Background()
 	choices, err := ctrl.Profiles(ctx)
-	if err != nil || len(choices) != 2 || choices[0].Name != "daily — Daily chat" || choices[1].Name != "idle" {
+	if err != nil || len(choices) != 2 || choices[0].Name != "daily — Daily chat" || choices[0].Description != "Daily chat" || choices[1].Name != "idle" {
 		t.Fatalf("profile choices = %v, %v", choices, err)
 	}
 	if err := ctrl.ApplyProfile(ctx, "daily", ""); err == nil {

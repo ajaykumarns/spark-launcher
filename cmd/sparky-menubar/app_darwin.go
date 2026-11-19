@@ -149,6 +149,14 @@ func (a *menuApp) renderLocked() {
 		snap.LoadMessage = "Loading a model…"
 	}
 
+	if a.catalogErr == "" {
+		for _, choice := range a.profiles {
+			if choice.ID == snap.ProfileName {
+				snap.ProfileDescription = choice.Description
+				break
+			}
+		}
+	}
 	v := menubarui.BuildPanel(snap, a.prefs, nil, a.picking, a.ctrl != nil)
 	if running {
 		v.HeaderState = "Switching profile"
@@ -176,7 +184,6 @@ func (a *menuApp) renderLocked() {
 		LoadResult:    v.LoadResult,
 	})
 	panelSetExtraModels(v.ExtraModels)
-	panelSetCapabilities(v.Capabilities)
 	pairs := make([]panelPair, len(v.MemoryRows))
 	for i, p := range v.MemoryRows {
 		pairs[i] = panelPair{Label: p.Label, Value: p.Value}

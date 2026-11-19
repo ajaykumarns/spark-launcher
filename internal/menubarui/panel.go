@@ -12,12 +12,11 @@ import (
 // The AppKit bridge only lays out and draws these strings; all decisions about
 // what to show happen here so they are portable and testable without cgo.
 type PanelView struct {
-	HeaderTitle   string // "Sparky"
-	HeaderState   string // "Ready" / "Idle" / "Loading" / "Unreachable" / "Failed"
-	ModelCaption  string // "Language model"
-	ModelName     string // strong model name, or "No model loaded"/"Unknown"
-	ModelLocation string // "Ready on Spark 1 + Spark 2"
-	Capabilities  []PanelPair
+	HeaderTitle   string   // "Sparky"
+	HeaderState   string   // "Ready" / "Idle" / "Loading" / "Unreachable" / "Failed"
+	ModelCaption  string   // "Language model"
+	ModelName     string   // strong model name, or "No model loaded"/"Unknown"
+	ModelLocation string   // "Ready on Spark 1 + Spark 2"
 	ExtraModels   []string // additional loaded LLMs, one short line each
 
 	MemoryCaption string // "Device memory · in use / total"
@@ -101,24 +100,8 @@ func BuildPanel(s menubar.Snapshot, prefs Prefs, choices []Choice, picking bool,
 
 	if s.ProfileName != "" {
 		v.ModelName = "Profile: " + s.ProfileName
-		v.ModelLocation = ""
+		v.ModelLocation = strings.Join(strings.Fields(s.ProfileDescription), " ")
 		v.ExtraModels = nil
-		if !connected {
-			v.ModelLocation = "Last applied · live status unavailable"
-		} else {
-			if len(s.Capabilities) == 0 {
-				v.ModelLocation = "No capabilities in this profile"
-			}
-			for _, capability := range s.Capabilities {
-				state := capability.State
-				switch state {
-				case "available", "partial", "unavailable":
-				default:
-					state = "unknown"
-				}
-				v.Capabilities = append(v.Capabilities, PanelPair{Label: capability.Name, Value: state})
-			}
-		}
 		if connected && !s.Loading && !transitioning {
 			available := 0
 			partial := false

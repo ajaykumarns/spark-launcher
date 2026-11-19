@@ -526,3 +526,15 @@ func TestPanelNoCLI(t *testing.T) {
 		t.Fatalf("model = %q", v.ModelName)
 	}
 }
+
+func TestPanelShowsOptionalProfileDescription(t *testing.T) {
+	s := Snapshot{ProfileName: "daily", ProfileDescription: "Chat and\ntranscription", UpdatedAt: time.Now()}
+	view := BuildPanel(s, Prefs{}, nil, false, true)
+	if view.ModelName != "Profile: daily" || view.ModelLocation != "Chat and transcription" {
+		t.Fatalf("profile header = %q, %q", view.ModelName, view.ModelLocation)
+	}
+	s.ProfileDescription = ""
+	if subtitle := BuildPanel(s, Prefs{}, nil, false, true).ModelLocation; subtitle != "" {
+		t.Fatalf("profile without a description shows %q", subtitle)
+	}
+}
