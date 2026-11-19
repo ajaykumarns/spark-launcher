@@ -134,7 +134,7 @@ func deviceQueryUnits(names []string) (Object, error) {
 	return units, nil
 }
 
-const deviceContainerTemplate = `{"name":{{json .Name}},"running":{{.State.Running}},"id":{{json .Id}},"started_at":{{json .State.StartedAt}},"oom_killed":{{.State.OOMKilled}},"health":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}}}`
+const deviceContainerTemplate = `{"name":{{json .Name}},"running":{{.State.Running}},"id":{{json .Id}},"started_at":{{json .State.StartedAt}},"oom_killed":{{.State.OOMKilled}},"health":{{with index .State "Health"}}{{json .Status}}{{else}}null{{end}}}`
 
 func deviceQueryContainers() (Object, error) {
 	ids, err := deviceRun([]string{"sudo", "-n", "docker", "ps", "-aq"}, deviceCommandTimeout)

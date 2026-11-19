@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"text/template"
 	"time"
 )
 
@@ -422,5 +423,25 @@ func TestDeviceMalformedMemory(t *testing.T) {
 	deviceProbeStub(t)
 	if _, err := Probe(Object{"units": Object{}, "asset_roots": []any{}}); err == nil || !strings.Contains(err.Error(), "memory") {
 		t.Fatal("expected missing MemAvailable error")
+	}
+}
+
+func TestDeviceContainerTemplateAllowsMissingHealth(t *testing.T) {
+	format := template.Must(template.New("docker inspect").Option("missingkey=error").
+		Funcs(template.FuncMap{"json": compactJSON}).Parse(deviceContainerTemplate))
+	state := Object{"Running": true, "StartedAt": "test", "OOMKilled": false}
+	container := Object{"Name": "/example", "Id": "example", "State": state}
+	for _, want := range []any{nil, "healthy"} {
+		if want != nil {
+			state["Health"] = Object{"Status": want}
+		}
+		var out strings.Builder
+		if err := format.Execute(&out, container); err != nil {
+			t.Fatal(err)
+		}
+		row, err := decode([]byte(out.String()))
+		if err != nil || row["health"] != want || !boolean(row["running"]) {
+			t.Fatalf("wanted health %v in a valid running container, got %v (%v)", want, row, err)
+		}
 	}
 }
