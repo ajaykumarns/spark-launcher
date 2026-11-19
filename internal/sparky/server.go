@@ -409,14 +409,14 @@ func (s *controllerServer) serveModels(w http.ResponseWriter) {
 	extra := map[string]Object{}
 	for _, row := range arr(catalog["data"]) {
 		entry := obj(row)
-		key := strings.TrimPrefix(str(entry["id"]), "garuda/")
+		key := strings.TrimPrefix(strings.TrimPrefix(str(entry["id"]), "garuda/"), "spark-decision/")
 		extra[key] = entry
 	}
 	rows := arr(wire["data"])
 	overlaid := make([]any, 0, len(rows))
 	for _, row := range rows {
 		entry := obj(row)
-		key := strings.TrimPrefix(str(entry["id"]), "garuda/")
+		key := strings.TrimPrefix(strings.TrimPrefix(str(entry["id"]), "garuda/"), "spark-decision/")
 		if extraRow, ok := extra[key]; ok {
 			merged := copyObject(entry)
 			for _, k := range keys(extraRow) {

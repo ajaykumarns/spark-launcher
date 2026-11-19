@@ -18,13 +18,15 @@ var autoGatewayAPI = "http://127.0.0.1:8081"
 
 // autoGatewaySyncHook points at the sync entry point so callers stay swappable.
 var autoGatewaySyncHook = syncAutoGateway
+var decisionAutoGatewaySyncHook = syncDecisionAutoGateway
 
 const (
-	autoRuleName         = "sparky-spark-auto"
-	autoRuleDescription  = "Sparky ready model pool"
-	autoRuleCEL          = "model == 'spark-auto'"
-	autoUnavailableModel = "sparky-auto-unavailable"
-	autoMaxResponseBytes = 2 << 20
+	autoRuleName                 = "sparky-spark-auto"
+	autoRuleDescription          = "Sparky ready model pool"
+	autoRuleCEL                  = "model == 'spark-auto'"
+	autoUnavailableModel         = "sparky-auto-unavailable"
+	decisionAutoUnavailableModel = "sparky-decision-auto-unavailable"
+	autoMaxResponseBytes         = 2 << 20
 )
 
 // syncAutoGateway makes the Bifrost rule named "sparky-spark-auto" point at
@@ -34,21 +36,40 @@ func syncAutoGateway(ctx context.Context, cfg Object, models []string) error {
 	if str(obj(cfg["auto"])["routing"]) != "bifrost" {
 		return nil
 	}
+	return syncGatewayAutoRule(ctx, cfg, models, false)
+}
+
+func syncDecisionAutoGateway(ctx context.Context, cfg Object, models []string) error {
+	if !decisionBifrostAuto(cfg) {
+		return nil
+	}
+	return syncGatewayAutoRule(ctx, cfg, models, true)
+}
+
+func syncGatewayAutoRule(ctx context.Context, cfg Object, models []string, decision bool) error {
+	name, description, expression := autoRuleName, autoRuleDescription, autoRuleCEL
+	targets, fallbacks := autoRuleTargets(models)
+	priority := 0
+	if decision {
+		priority = 1
+		name, description = "sparky-decision-auto", "Sparky ready decision model pool"
+		expression = "provider == 'spark-decision' && model == 'auto'"
+		targets, fallbacks = autoRuleTargetsFor(models, "spark-decisions", "spark-decision", decisionAutoUnavailableModel)
+	}
 
 	user, pass, err := autoAdminCredentials(str(cfg["root"]))
 	if err != nil {
 		return err
 	}
 
-	targets, fallbacks := autoRuleTargets(models)
 	desired := Object{
-		"name":           autoRuleName,
-		"description":    autoRuleDescription,
+		"name":           name,
+		"description":    description,
 		"enabled":        true,
 		"chain_rule":     false,
 		"scope":          "global",
-		"priority":       0,
-		"cel_expression": autoRuleCEL,
+		"priority":       priority,
+		"cel_expression": expression,
 		"targets":        targets,
 		"fallbacks":      fallbacks,
 	}
@@ -63,7 +84,7 @@ func syncAutoGateway(ctx context.Context, cfg Object, models []string) error {
 	matches := 0
 	for _, raw := range rules {
 		rule := obj(raw)
-		if rule != nil && str(rule["name"]) == autoRuleName {
+		if rule != nil && str(rule["name"]) == name {
 			matches++
 			current = rule
 		}
@@ -71,7 +92,7 @@ func syncAutoGateway(ctx context.Context, cfg Object, models []string) error {
 
 	switch {
 	case matches > 1:
-		return fail("gateway has %d rules named %q, expected at most one", matches, autoRuleName)
+		return fail("gateway has %d rules named %q, expected at most one", matches, name)
 	case matches == 0:
 		created, err := autoGatewayRequest(ctx, client, user, pass, http.MethodPost, "/api/routing/rules", desired)
 		if err != nil {
@@ -87,7 +108,7 @@ func syncAutoGateway(ctx context.Context, cfg Object, models []string) error {
 
 	id := str(current["id"])
 	if id == "" {
-		return fail("gateway rule %q has no id", autoRuleName)
+		return fail("gateway rule %q has no id", name)
 	}
 	path := "/api/routing/rules/" + url.PathEscape(id)
 	if _, err := autoGatewayRequest(ctx, client, user, pass, http.MethodPut, path, desired); err != nil {
@@ -114,6 +135,10 @@ func autoAdminCredentials(root string) (string, string, error) {
 // autoRuleTargets builds the target list and fallback list for one sync.
 // Models are sorted and deduplicated. Weights are always above zero.
 func autoRuleTargets(models []string) ([]any, []any) {
+	return autoRuleTargetsFor(models, "garuda", "garuda", autoUnavailableModel)
+}
+
+func autoRuleTargetsFor(models []string, provider, unavailableProvider, unavailableModel string) ([]any, []any) {
 	seen := make(map[string]bool, len(models))
 	clean := make([]string, 0, len(models))
 	for _, model := range models {
@@ -126,10 +151,10 @@ func autoRuleTargets(models []string) ([]any, []any) {
 	}
 
 	if len(clean) == 0 {
-		sentinel := Object{"provider": "garuda", "model": autoUnavailableModel, "weight": 1.0}
+		sentinel := Object{"provider": unavailableProvider, "model": unavailableModel, "weight": 1.0}
 		// Bifrost only replaces caller fallbacks when a rule supplies a
 		// nonempty list. Keep the sentinel as the sole fallback as well.
-		return []any{sentinel}, []any{"garuda/" + autoUnavailableModel}
+		return []any{sentinel}, []any{unavailableProvider + "/" + unavailableModel}
 	}
 
 	sort.Strings(clean)
@@ -137,8 +162,8 @@ func autoRuleTargets(models []string) ([]any, []any) {
 	targets := make([]any, 0, len(clean))
 	fallbacks := make([]any, 0, len(clean))
 	for _, model := range clean {
-		targets = append(targets, Object{"provider": "garuda", "model": model, "weight": weight})
-		fallbacks = append(fallbacks, "garuda/"+model)
+		targets = append(targets, Object{"provider": provider, "model": model, "weight": weight})
+		fallbacks = append(fallbacks, provider+"/"+model)
 	}
 	return targets, fallbacks
 }
@@ -206,13 +231,13 @@ func autoGatewayRequest(ctx context.Context, client *http.Client, user, pass, me
 // such as id, created_at, and updated_at are ignored. Absent fallbacks match
 // an empty list, and an absent chain_rule matches false.
 func autoRuleEqual(current, desired Object) bool {
-	if str(current["name"]) != autoRuleName ||
-		str(current["description"]) != autoRuleDescription ||
+	if str(current["name"]) != str(desired["name"]) ||
+		str(current["description"]) != str(desired["description"]) ||
 		!boolean(current["enabled"]) ||
 		boolean(current["chain_rule"]) ||
 		str(current["scope"]) != "global" ||
-		num(current["priority"]) != 0 ||
-		str(current["cel_expression"]) != autoRuleCEL {
+		num(current["priority"]) != num(desired["priority"]) ||
+		str(current["cel_expression"]) != str(desired["cel_expression"]) {
 		return false
 	}
 

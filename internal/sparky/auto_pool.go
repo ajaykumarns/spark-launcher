@@ -12,6 +12,10 @@ import (
 )
 
 func bifrostAuto(cfg Object) bool { return str(obj(cfg["auto"])["routing"]) == "bifrost" }
+func decisionBifrostAuto(cfg Object) bool {
+	return str(obj(cfg["decision_auto"])["routing"]) == "bifrost"
+}
+func gatewayAutoEnabled(cfg Object) bool { return bifrostAuto(cfg) || decisionBifrostAuto(cfg) }
 
 type autoUnavailableError struct{ message string }
 
@@ -22,6 +26,13 @@ func (e autoUnavailableError) HTTPStatus() int { return http.StatusServiceUnavai
 // changes, so an availability update cannot race a planned model stop.
 func (c *Coordinator) syncAutoRoutesLocked(ctx context.Context, excluded []string) error {
 	cfg := c.cfg()
+	if err := c.syncChatAutoRoutesLocked(ctx, cfg, excluded); err != nil {
+		return err
+	}
+	return c.syncDecisionAutoRoutesLocked(ctx, cfg, excluded)
+}
+
+func (c *Coordinator) syncChatAutoRoutesLocked(ctx context.Context, cfg Object, excluded []string) error {
 	if !bifrostAuto(cfg) {
 		return nil
 	}
@@ -53,6 +64,42 @@ func (c *Coordinator) syncAutoRoutesLocked(ctx context.Context, excluded []strin
 	}
 	c.mu.Lock()
 	c.autoPool = metadata
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *Coordinator) syncDecisionAutoRoutesLocked(ctx context.Context, cfg Object, excluded []string) error {
+	if !decisionBifrostAuto(cfg) {
+		return nil
+	}
+	names := []string{}
+	selections := []*runtimeSelection{}
+	for _, name := range stringsOf(obj(cfg["decision_auto"])["targets"]) {
+		if contains(excluded, name) || !contains(enabledLLMs(cfg), name) || str(obj(obj(cfg["models"])[name])["api_kind"]) != "decision" {
+			continue
+		}
+		selection, err := c.loadedSelection(name)
+		if err != nil || backendForRecipe(selection.Setting, selection.Record) == "" || !c.runtime.ready(ctx, name, selection.Setting, selection.Nodes) {
+			continue
+		}
+		names = append(names, name)
+		selections = append(selections, selection)
+	}
+	poolConfig := copyObject(cfg)
+	poolConfig["auto"] = copyObject(obj(cfg["decision_auto"]))
+	metadata := autoPoolMetadata(poolConfig, names, selections)
+	metadata["request_model"], metadata["api_kind"] = "spark-decision/auto", "decision"
+	if !boolean(metadata["available"]) {
+		names = nil
+	}
+	if err := decisionAutoGatewaySyncHook(ctx, cfg, names); err != nil {
+		c.mu.Lock()
+		c.decisionAutoPool = Object{"available": false, "routing": "bifrost", "request_model": "spark-decision/auto", "routing_error": err.Error()}
+		c.mu.Unlock()
+		return err
+	}
+	c.mu.Lock()
+	c.decisionAutoPool = metadata
 	c.mu.Unlock()
 	return nil
 }
@@ -145,7 +192,7 @@ func (c *Coordinator) ReconcileAutoRouting() error {
 }
 
 func (c *Coordinator) finishAutoOperation(result Object, operationErr error) (Object, error) {
-	if !bifrostAuto(c.cfg()) {
+	if !gatewayAutoEnabled(c.cfg()) {
 		return result, operationErr
 	}
 	if syncErr := c.ReconcileAutoRouting(); syncErr != nil {

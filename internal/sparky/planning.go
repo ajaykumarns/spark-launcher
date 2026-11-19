@@ -132,6 +132,9 @@ func modelCatalog(c Object) Object {
 	for _, name := range enabledLLMs(c) {
 		m, s, nodes, _, _ := selectPlacement(c, name, "")
 		row := Object{"id": "garuda/" + name, "name": value(m, "name", name), "context_length": s["context_tokens"], "output_tokens": value(m, "output_tokens", min(16384, num(s["context_tokens"])-1)), "aliases": value(m, "aliases", []any{}), "inputs": value(m, "inputs", []any{"text"}), "reasoning": value(m, "reasoning", false), "nodes": nodes}
+		if kind := str(m["api_kind"]); kind != "" {
+			row["api_kind"] = kind
+		}
 		data = append(data, row)
 		byID[name] = row
 	}
@@ -145,6 +148,13 @@ func modelCatalog(c Object) Object {
 			outputLimit = min(outputLimit, num(row["output_tokens"]))
 		}
 		data = append(data, Object{"id": "garuda/spark-auto", "name": "Spark Auto", "context_length": contextLimit, "output_tokens": outputLimit, "aliases": []any{"auto"}, "inputs": []any{"text"}})
+	}
+	if auto := obj(c["decision_auto"]); len(auto) > 0 {
+		window := mathMaxNumber
+		for _, name := range stringsOf(auto["targets"]) {
+			window = min(window, num(obj(byID[name])["context_length"]))
+		}
+		data = append(data, Object{"id": "spark-decision/auto", "name": "Spark Decision Auto", "api_kind": "decision", "context_length": window, "output_tokens": 1, "inputs": []any{"text"}})
 	}
 	// Text-to-speech services stay separate from language models and expose
 	// only whitelisted metadata; nothing else from the config leaks out.

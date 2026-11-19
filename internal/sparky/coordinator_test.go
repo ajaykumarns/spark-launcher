@@ -896,15 +896,25 @@ func TestConcurrentRetriesReleaseOnceOnFailure(t *testing.T) {
 // the first waiter wins and later waiters stay queued behind it in order.
 func TestPendingFIFOOrder(t *testing.T) {
 	env := newTestEnv(t)
-	holder, _ := env.coord.acquire(context.Background(), "qwen", []string{"spark01"}, true, 0, "h", "", true)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	holder, _ := env.coord.acquire(ctx, "qwen", []string{"spark01"}, true, 0, "h", "", true)
 	type res struct{ rid, id string }
 	done := make(chan res, 3)
-	for _, rid := range []string{"spark01:w1", "spark01:w2", "spark01:w3"} {
+	for i, rid := range []string{"spark01:w1", "spark01:w2", "spark01:w3"} {
 		go func(rid string) {
-			id, _ := env.coord.acquire(context.Background(), "qwen", []string{"spark01"}, true, 0, rid, "", true)
+			id, _ := env.coord.acquire(ctx, "qwen", []string{"spark01"}, true, 0, rid, "", true)
 			done <- res{rid, id}
 		}(rid)
-		env.waitForAdmission("qwen")
+		// The earlier waiters have the same workload name. Wait for this
+		// goroutine to join the queue before starting the next one.
+		for len(arr(env.coord.Admission()["waiting"])) != i+1 {
+			select {
+			case <-ctx.Done():
+				t.Fatalf("%s never reached the queue: %v", rid, env.coord.Admission()["waiting"])
+			case <-time.After(time.Millisecond):
+			}
+		}
 	}
 	env.coord.Release(holder)
 	first := <-done
