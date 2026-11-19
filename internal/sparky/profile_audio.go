@@ -72,7 +72,7 @@ func (r *Runtime) applyProfileAudio(ctx context.Context, step Object) error {
 func (r *Runtime) waitProfileAudio(ctx context.Context, node, container string) error {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	const status = "{{if not .State.Running}}stopped{{else if .State.Health}}{{.State.Health.Status}}{{else}}running{{end}}"
+	const status = `{{if not .State.Running}}stopped{{else}}{{with index .State "Health"}}{{.Status}}{{else}}running{{end}}{{end}}`
 	for {
 		out, err := r.audioDocker(ctx, node, "inspect", "--format", status, container)
 		if err != nil {
