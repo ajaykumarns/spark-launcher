@@ -178,38 +178,6 @@ func listProfiles(root string) (Object, error) {
 	return Object{"profiles": profiles, "selected": str(selectedProfile(cfg)["name"])}, nil
 }
 
-func renderProfileList(data Object) string {
-	var out strings.Builder
-	for _, raw := range arr(data["profiles"]) {
-		row := obj(raw)
-		name := str(row["name"])
-		if name == str(data["selected"]) {
-			name += " (last applied)"
-		}
-		if problem := str(row["error"]); problem != "" {
-			fmt.Fprintf(&out, "%s — %s\n", name, problem)
-			continue
-		}
-		var groups []string
-		for _, group := range arr(row["capabilities"]) {
-			groups = append(groups, str(obj(group)["name"]))
-		}
-		if len(groups) == 0 {
-			groups = []string{"no capabilities"}
-		}
-		groupList := strings.Join(groups, ", ")
-		if description := strings.Join(strings.Fields(str(row["description"])), " "); description != "" {
-			fmt.Fprintf(&out, "%s — %s (%s)\n", name, description, groupList)
-		} else {
-			fmt.Fprintf(&out, "%s — %s\n", name, groupList)
-		}
-	}
-	if out.Len() == 0 {
-		return "No profiles defined.\n"
-	}
-	return out.String()
-}
-
 func profileCapability(name string, model Object) string {
 	if name == "spark-ocr" && model == nil {
 		return "ocr"

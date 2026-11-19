@@ -78,7 +78,11 @@ static NSString *Str(const char *s) { return s ? [NSString stringWithUTF8String:
 @property (nonatomic, strong) NSMenuItem *titleItem;
 @property (nonatomic, strong) NSMenuItem *resultItem;
 @property (nonatomic, strong) NSMenuItem *catalogItem;
-@property (nonatomic, strong) SparkyInfoRow *header;
+@property (nonatomic, strong) NSMenuItem *locationItem;
+@property (nonatomic, strong) NSMenuItem *capabilitiesItem;
+@property (nonatomic, strong) NSView *capabilitiesRow;
+@property (nonatomic, strong) NSArray<NSString *> *capabilityNames;
+@property (nonatomic, strong) NSArray<NSString *> *capabilityStates;
 @property (nonatomic, strong) SparkyInfoRow *model;
 @property (nonatomic, strong) SparkyInfoRow *location;
 @property (nonatomic, strong) SparkyInfoRow *memoryCaption;
@@ -94,6 +98,7 @@ static NSString *Str(const char *s) { return s ? [NSString stringWithUTF8String:
 @property (nonatomic, strong) NSArray<NSString *> *choiceLabels;
 @property (nonatomic, strong) NSArray<NSString *> *choiceIDs;
 @property (nonatomic, strong) NSString *pickerCaption;
+@property (nonatomic, strong) NSString *selectedProfile;
 @property (nonatomic) BOOL tracking;
 @property (nonatomic) BOOL modelTracking;
 @property (nonatomic) BOOL mainDirty;
@@ -118,7 +123,7 @@ static NSMenuItem *Action(NSString *title, SEL selector, id target, NSString *ke
     item.target = target;
     return item;
 }
-static NSMenuItem *Info(SparkyInfoRow *row) {
+static NSMenuItem *Info(NSView *row) {
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
     item.view = row;
     return item;
@@ -129,13 +134,14 @@ static NSMenuItem *Info(SparkyInfoRow *row) {
     if ((self = [super init])) {
         self.menu = NewMenu(@"Sparky");
         self.menu.minimumWidth = 300;
-        self.models = NewMenu(@"Switch profile");
+        self.models = NewMenu(@"Switch Profile");
         self.settings = NewMenu(@"Settings");
         self.menu.delegate = self;
         self.models.delegate = self;
         self.extras = @[]; self.memoryLabels = @[]; self.memoryValues = @[];
         self.choiceLabels = @[]; self.choiceIDs = @[]; self.pickerCaption = @"Loading profiles…";
-        self.header = [[SparkyInfoRow alloc] initSmall:NO strong:YES pair:NO];
+        self.capabilitiesRow = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 300, 24)];
+        self.capabilitiesRow.autoresizingMask = NSViewWidthSizable;
         self.model = [[SparkyInfoRow alloc] initSmall:NO strong:YES pair:NO];
         self.location = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
         self.memoryCaption = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
@@ -143,9 +149,8 @@ static NSMenuItem *Info(SparkyInfoRow *row) {
         self.footer = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
         self.result = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
         self.catalogState = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
-        [self.header setLeft:@"Sparky" right:@"Unknown"];
         [self.model setLeft:@"Waiting for status" right:@""];
-        self.loadItem = Action(@"Switch profile…", NULL, nil, @"");
+        self.loadItem = Action(@"Switch Profile", NULL, nil, @"");
         self.loadItem.submenu = self.models;
         self.refreshItem = Action(@"Refresh status", @selector(refresh:), self, @"");
         self.quitItem = Action(@"Quit Sparky", @selector(quit:), self, @"q");
@@ -162,9 +167,13 @@ static NSMenuItem *Info(SparkyInfoRow *row) {
 }
 - (void)buildMain {
     [self.menu removeAllItems];
-    [self.menu addItem:Info(self.header)];
     [self.menu addItem:Info(self.model)];
-    [self.menu addItem:Info(self.location)];
+    self.locationItem = Info(self.location);
+    self.locationItem.hidden = !self.location.left.stringValue.length;
+    [self.menu addItem:self.locationItem];
+    self.capabilitiesItem = Info(self.capabilitiesRow);
+    self.capabilitiesItem.hidden = !self.capabilityNames.count;
+    [self.menu addItem:self.capabilitiesItem];
     NSMutableArray *extraRows = [NSMutableArray array];
     for (NSString *line in self.extras) {
         SparkyInfoRow *row = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
@@ -205,7 +214,8 @@ static NSMenuItem *Info(SparkyInfoRow *row) {
     for (NSUInteger i = 0; i < self.choiceIDs.count; i++) {
         NSMenuItem *item = Action(self.choiceLabels[i], @selector(choose:), self, @"");
         item.representedObject = self.choiceIDs[i];
-        item.toolTip = self.choiceIDs[i];
+        item.toolTip = self.choiceLabels[i];
+        item.state = [self.choiceIDs[i] isEqualToString:self.selectedProfile] ? NSControlStateValueOn : NSControlStateValueOff;
         item.enabled = self.loadEnabled && self.hasCLI;
         [self.models addItem:item];
     }
@@ -299,8 +309,11 @@ void sparky_set_panel(const char *headerTitle, const char *headerState,
     NSString *mc=Str(memoryCaption), *rl=Str(refreshLabel), *ll=Str(loadLabel), *ft=Str(footer), *lr=Str(loadResult);
     OnMain(^{
         SparkyMenuController *c = Controller();
-        [c.header setLeft:ht right:hs]; [c.model setLeft:mn right:@""];
-        [c.location setLeft:ml right:@""]; [c.memoryCaption setLeft:mc right:@""];
+        gItem.button.toolTip = [NSString stringWithFormat:@"%@ · %@", ht, hs];
+        [c.model setLeft:mn right:@""];
+        [c.location setLeft:ml right:@""];
+        c.locationItem.hidden = !ml.length;
+        [c.memoryCaption setLeft:mc right:@""];
         [c.footer setLeft:ft right:@""]; [c.result setLeft:lr right:@""];
         c.resultItem.hidden = !lr.length;
         c.loadItem.title = ll; c.refreshItem.title = rl;
@@ -317,6 +330,44 @@ void sparky_set_extra_models(const char **lines, int count) {
         else for (NSUInteger i=0; i<MIN(values.count,c.extraRows.count); i++) [c.extraRows[i] setLeft:values[i] right:@""];
     });
 }
+void sparky_set_capabilities(const char **names, const char **states, int count) {
+    NSMutableArray *labels = [NSMutableArray array], *availability = [NSMutableArray array];
+    for (int i = 0; i < count && names && states; i++) {
+        [labels addObject:Str(names[i])];
+        [availability addObject:Str(states[i])];
+    }
+    OnMain(^{
+        SparkyMenuController *c = Controller();
+        if ([c.capabilityNames isEqualToArray:labels] && [c.capabilityStates isEqualToArray:availability]) return;
+        c.capabilityNames = labels;
+        c.capabilityStates = availability;
+        NSDictionary *symbols = @{
+            @"chat": @"bubble.left.and.bubble.right",
+            @"decisions": @"checkmark.diamond",
+            @"transcription": @"waveform",
+            @"speech": @"speaker.wave.2",
+            @"images": @"photo",
+            @"ocr": @"text.viewfinder"
+        };
+        NSMutableArray *icons = [NSMutableArray array];
+        for (NSUInteger i = 0; i < labels.count; i++) {
+            NSString *name = labels[i], *state = availability[i];
+            NSString *displayName = [name isEqualToString:@"ocr"] ? @"OCR" : name.capitalizedString;
+            NSString *detail = [NSString stringWithFormat:@"%@ · %@", displayName, state];
+            NSImageView *icon = [[NSImageView alloc] initWithFrame:NSMakeRect(18 + i * 29, 2, 19, 19)];
+            icon.image = [NSImage imageWithSystemSymbolName:(symbols[name] ?: @"circle") accessibilityDescription:detail];
+            icon.symbolConfiguration = [NSImageSymbolConfiguration configurationWithPointSize:15 weight:NSFontWeightMedium];
+            icon.contentTintColor = [state isEqualToString:@"available"] ? NSColor.labelColor :
+                ([state isEqualToString:@"partial"] ? NSColor.systemOrangeColor : NSColor.tertiaryLabelColor);
+            icon.toolTip = detail;
+            [icon setAccessibilityLabel:detail];
+            [icons addObject:icon];
+        }
+        c.capabilitiesRow.subviews = icons;
+        c.capabilitiesItem.hidden = !icons.count;
+    });
+}
+
 void sparky_set_memory_rows(const char **labels, const char **values, int count) {
     NSMutableArray *l=[NSMutableArray array], *v=[NSMutableArray array];
     for (int i=0; i<count && labels && values; i++) { [l addObject:Str(labels[i])]; [v addObject:Str(values[i])]; }
@@ -331,17 +382,25 @@ void sparky_set_requests(const char *label, const char *value) {
     NSString *l=Str(label), *v=Str(value);
     OnMain(^{ [Controller().requests setLeft:l right:v]; });
 }
-void sparky_set_picker(int picking, const char *caption, const char **labels, const char **ids, int count) {
-    NSString *cap=Str(caption);
+void sparky_set_picker(int picking, const char *caption, const char **labels, const char **ids, int count, const char *selected) {
+    NSString *cap=Str(caption), *current=Str(selected);
     NSMutableArray *l=[NSMutableArray array], *v=[NSMutableArray array];
     for (int i=0; i<count && labels && ids; i++) { [l addObject:Str(labels[i])]; [v addObject:Str(ids[i])]; }
     OnMain(^{
         SparkyMenuController *c = Controller();
         BOOL changed = ![c.choiceLabels isEqualToArray:l] || ![c.choiceIDs isEqualToArray:v];
-        c.pickerCaption=cap; c.choiceLabels=l; c.choiceIDs=v;
+        BOOL selectionChanged = ![current isEqualToString:c.selectedProfile];
+        c.pickerCaption=cap; c.choiceLabels=l; c.choiceIDs=v; c.selectedProfile=current;
         [c.catalogState setLeft:cap right:@""];
         c.catalogItem.hidden = v.count && [cap isEqualToString:@"Select a profile"];
         if (changed) { c.modelsDirty=YES; if (!c.modelTracking) [c buildModels]; }
+        if (selectionChanged) {
+            for (NSMenuItem *item in c.models.itemArray) {
+                if (item.action == @selector(choose:)) {
+                    item.state = [item.representedObject isEqualToString:current] ? NSControlStateValueOn : NSControlStateValueOff;
+                }
+            }
+        }
     });
 }
 void sparky_set_enabled(int loadEnabled, int refreshEnabled, int hasCLI) {
@@ -373,6 +432,20 @@ int sparky_probe_choice_count(void) {
     for (NSMenuItem *item in Controller().models.itemArray) if (item.action == @selector(choose:)) count++;
     return count;
 }
+char *sparky_probe_selected_profile(void) {
+    for (NSMenuItem *item in Controller().models.itemArray) {
+        if (item.action == @selector(choose:) && item.state == NSControlStateValueOn)
+            return strdup([item.representedObject UTF8String]);
+    }
+    return NULL;
+}
+int sparky_probe_capability_count(void) {
+    SparkyMenuController *c = Controller();
+    if (c.capabilitiesItem.hidden) return 0;
+    for (NSImageView *icon in c.capabilitiesRow.subviews)
+        if (!icon.image || !icon.toolTip.length) return -1;
+    return (int)c.capabilitiesRow.subviews.count;
+}
 char *sparky_probe_picker_caption(void) { return strdup(Controller().pickerCaption.UTF8String); }
 char *sparky_probe_layout(int picking) {
     if (!NSThread.isMainThread) return strdup("native menu test requires main thread");
@@ -381,7 +454,9 @@ char *sparky_probe_layout(int picking) {
         return strdup("actions must use native menu items and a native model submenu");
     if (c.menu.autoenablesItems || c.models.autoenablesItems)
         return strdup("native validation must preserve Go enablement");
-    for (SparkyInfoRow *row in @[c.header,c.model,c.location,c.memoryCaption,c.requests,c.footer]) {
+    if (c.menu.itemArray.firstObject.view != c.model)
+        return strdup("the profile or model must be the first row");
+    for (SparkyInfoRow *row in @[c.model,c.location,c.memoryCaption,c.requests,c.footer]) {
         [row layoutSubtreeIfNeeded];
         if (NSHeight(row.frame)>22 || NSWidth(row.frame)<300 || row.left.maximumNumberOfLines>1)
             return strdup("information rows must use compact single-line menu geometry");

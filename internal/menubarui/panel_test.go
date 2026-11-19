@@ -54,7 +54,7 @@ func TestPanelReadyMatchesReferenceHierarchy(t *testing.T) {
 	if v.RequestsRow.Label != "Active requests" || v.RequestsRow.Value != "0" {
 		t.Fatalf("requests = %+v", v.RequestsRow)
 	}
-	if v.LoadRowLabel != "Switch profile…" || v.RefreshRowLabel != "Refresh status" {
+	if v.LoadRowLabel != "Switch Profile" || v.RefreshRowLabel != "Refresh status" {
 		t.Fatalf("rows = %q/%q", v.LoadRowLabel, v.RefreshRowLabel)
 	}
 	if !strings.HasPrefix(v.Footer, "Updated ") {

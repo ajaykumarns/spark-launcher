@@ -13,6 +13,8 @@ import "C"
 
 import (
 	"unsafe"
+
+	"sparky/internal/menubarui"
 )
 
 // cstr returns a C string for s. Callers must free it with C.free.
@@ -82,6 +84,16 @@ func panelSetExtraModels(lines []string) {
 	C.sparky_set_extra_models(cArray(list), n)
 }
 
+func panelSetCapabilities(rows []menubarui.PanelPair) {
+	names, states := make([]*C.char, len(rows)), make([]*C.char, len(rows))
+	for i, row := range rows {
+		names[i], states[i] = cstr(row.Label), cstr(row.Value)
+	}
+	defer freeC(names)
+	defer freeC(states)
+	C.sparky_set_capabilities(cArray(names), cArray(states), C.int(len(rows)))
+}
+
 func panelSetMemoryRows(pairs []panelPair) {
 	if len(pairs) == 0 {
 		C.sparky_set_memory_rows(nil, nil, 0)
@@ -105,7 +117,7 @@ func panelSetRequests(label, value string) {
 	C.sparky_set_requests(lab, val)
 }
 
-func panelSetPicker(picking bool, caption string, labels, ids []string) {
+func panelSetPicker(picking bool, caption string, labels, ids []string, selected string) {
 	cap := cstr(caption)
 	defer freeC([]*C.char{cap})
 	lab, n := cstrSlice(labels)
@@ -116,7 +128,9 @@ func panelSetPicker(picking bool, caption string, labels, ids []string) {
 	if picking {
 		p = 1
 	}
-	C.sparky_set_picker(p, cap, cArray(lab), cArray(idv), n)
+	current := cstr(selected)
+	defer freeC([]*C.char{current})
+	C.sparky_set_picker(p, cap, cArray(lab), cArray(idv), n, current)
 }
 
 func panelSetEnabled(loadEnabled, refreshEnabled, hasCLI bool) {

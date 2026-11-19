@@ -283,6 +283,9 @@ func cliParse(args []string) (*cliInvocation, error) {
 	}
 
 	command := args[index]
+	if command == "profiles" {
+		command = "profile"
+	}
 	if !contains(cliCommandList, command) {
 		hint := ""
 		if closest := clientClosestMatch(command, cliCommandList); closest != "" {

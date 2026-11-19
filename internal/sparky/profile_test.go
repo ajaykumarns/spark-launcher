@@ -57,7 +57,7 @@ func TestProfileApplyNativeLifecycle(t *testing.T) {
 	rows := arr(listed["profiles"])
 	if str(obj(rows[0])["name"]) != "dual" || obj(rows[0])["description"] != nil ||
 		str(obj(rows[2])["name"]) != "single" || str(obj(rows[2])["description"]) != description ||
-		!strings.Contains(renderProfileList(listed), description) {
+		!strings.Contains(formatProfileList(listed, 100, false), description) {
 		t.Fatalf("list should show descriptions where defined: %v", listed)
 	}
 
@@ -453,5 +453,33 @@ func TestProfileCanStopFailedOwnedModel(t *testing.T) {
 	result = planProfile(nil, clusterProfile{}, snapshot, ready)
 	if !boolean(result["blocked"]) || len(arr(result["steps"])) != 0 {
 		t.Fatalf("an unowned model cannot be stopped: %v", result)
+	}
+}
+
+func TestProfileCapabilityTables(t *testing.T) {
+	groups := []any{
+		Object{"name": "chat", "state": "partial", "providers": []any{
+			Object{"workload": "glm", "nodes": []any{"spark01"}, "ready": true},
+			Object{"workload": "second-model", "nodes": []any{"spark02"}, "ready": false},
+		}},
+		Object{"name": "ocr", "state": "available", "providers": []any{
+			Object{"workload": "spark-ocr", "nodes": []any{"spark01"}, "ready": true},
+		}},
+	}
+	snapshot := Object{"profile": Object{"name": "daily", "capabilities": groups}}
+	got := formatStatus(snapshot, 100, false)
+	for _, want := range []string{"Live capabilities", "AVAILABILITY", "PLACEMENT", "Partial", "second-model (unavailable)", "OCR", "spark02"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("status is missing %q:\n%s", want, got)
+		}
+	}
+	profiles := Object{"selected": "daily", "profiles": []any{Object{
+		"name": "daily", "description": "Chat and document reading", "capabilities": groups,
+	}}}
+	got = formatProfileList(profiles, 100, false)
+	for _, want := range []string{"CAPABILITIES", "daily (selected)", "Chat and document reading", "Chat, OCR"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("profile list is missing %q:\n%s", want, got)
+		}
 	}
 }

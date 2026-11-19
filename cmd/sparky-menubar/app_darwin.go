@@ -158,11 +158,7 @@ func (a *menuApp) renderLocked() {
 	v.PickerCaption = a.pickerCaption()
 	if a.catalogErr == "" {
 		for _, choice := range a.profiles {
-			label := choice.Name
-			if choice.ID == snap.ProfileName {
-				label += " (last applied)"
-			}
-			v.Choices = append(v.Choices, label)
+			v.Choices = append(v.Choices, choice.Name)
 			v.ChoiceIDs = append(v.ChoiceIDs, choice.ID)
 		}
 	}
@@ -180,13 +176,14 @@ func (a *menuApp) renderLocked() {
 		LoadResult:    v.LoadResult,
 	})
 	panelSetExtraModels(v.ExtraModels)
+	panelSetCapabilities(v.Capabilities)
 	pairs := make([]panelPair, len(v.MemoryRows))
 	for i, p := range v.MemoryRows {
 		pairs[i] = panelPair{Label: p.Label, Value: p.Value}
 	}
 	panelSetMemoryRows(pairs)
 	panelSetRequests(v.RequestsRow.Label, v.RequestsRow.Value)
-	panelSetPicker(v.Picking, v.PickerCaption, v.Choices, v.ChoiceIDs)
+	panelSetPicker(v.Picking, v.PickerCaption, v.Choices, v.ChoiceIDs, snap.ProfileName)
 	panelSetEnabled(v.LoadEnabled, v.RefreshEnabled, v.HasCLI)
 	panelSetSettings(v.ShowTitle, menubarui.LoginEnabled())
 

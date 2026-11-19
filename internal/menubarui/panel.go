@@ -12,18 +12,19 @@ import (
 // The AppKit bridge only lays out and draws these strings; all decisions about
 // what to show happen here so they are portable and testable without cgo.
 type PanelView struct {
-	HeaderTitle   string   // "Sparky"
-	HeaderState   string   // "Ready" / "Idle" / "Loading" / "Unreachable" / "Failed"
-	ModelCaption  string   // "Language model"
-	ModelName     string   // strong model name, or "No model loaded"/"Unknown"
-	ModelLocation string   // "Ready on Spark 1 + Spark 2"
+	HeaderTitle   string // "Sparky"
+	HeaderState   string // "Ready" / "Idle" / "Loading" / "Unreachable" / "Failed"
+	ModelCaption  string // "Language model"
+	ModelName     string // strong model name, or "No model loaded"/"Unknown"
+	ModelLocation string // "Ready on Spark 1 + Spark 2"
+	Capabilities  []PanelPair
 	ExtraModels   []string // additional loaded LLMs, one short line each
 
 	MemoryCaption string // "Device memory · in use / total"
 	MemoryRows    []PanelPair
 	RequestsRow   PanelPair
 
-	LoadRowLabel    string // "Switch profile…"
+	LoadRowLabel    string // "Switch Profile"
 	RefreshRowLabel string // "Refresh status"
 	Footer          string
 
@@ -56,7 +57,7 @@ func BuildPanel(s menubar.Snapshot, prefs Prefs, choices []Choice, picking bool,
 		HeaderTitle:     "Sparky",
 		ModelCaption:    "Language model",
 		MemoryCaption:   "Device memory · in use / total",
-		LoadRowLabel:    "Switch profile…",
+		LoadRowLabel:    "Switch Profile",
 		RefreshRowLabel: "Refresh status",
 		PickerCaption:   "Run through the Sparky CLI",
 		HasCLI:          hasCLI,
@@ -100,11 +101,14 @@ func BuildPanel(s menubar.Snapshot, prefs Prefs, choices []Choice, picking bool,
 
 	if s.ProfileName != "" {
 		v.ModelName = "Profile: " + s.ProfileName
-		v.ModelLocation = "Last applied"
+		v.ModelLocation = ""
 		v.ExtraModels = nil
 		if !connected {
 			v.ModelLocation = "Last applied · live status unavailable"
 		} else {
+			if len(s.Capabilities) == 0 {
+				v.ModelLocation = "No capabilities in this profile"
+			}
 			for _, capability := range s.Capabilities {
 				state := capability.State
 				switch state {
@@ -112,7 +116,7 @@ func BuildPanel(s menubar.Snapshot, prefs Prefs, choices []Choice, picking bool,
 				default:
 					state = "unknown"
 				}
-				v.ExtraModels = append(v.ExtraModels, title(capability.Name)+" · "+state)
+				v.Capabilities = append(v.Capabilities, PanelPair{Label: capability.Name, Value: state})
 			}
 		}
 		if connected && !s.Loading && !transitioning {

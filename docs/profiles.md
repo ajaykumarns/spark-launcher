@@ -29,9 +29,10 @@ profiles:
 
 The YAML key (for example, `everyday`) is the profile ID. Use it in plan
 and apply commands. The optional `description` explains the profile in the
-CLI and the Switch profile menu.
+CLI and the Switch Profile menu.
 
-Use `sparky profile list` to list profiles, descriptions, and capabilities. Use
+Use `sparky profile list` (or `sparky profiles list`) to list profiles,
+descriptions, and capabilities. Use
 `sparky profile plan everyday` to preview the switch. Use
 `sparky profile apply everyday` to apply it. All three commands accept
 `--json`. Pass the plan's JSON `plan_id` to
