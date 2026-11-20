@@ -86,7 +86,6 @@ static NSString *Str(const char *s) { return s ? [NSString stringWithUTF8String:
 @property (nonatomic, strong) SparkyInfoRow *requests;
 @property (nonatomic, strong) SparkyInfoRow *footer;
 @property (nonatomic, strong) SparkyInfoRow *result;
-@property (nonatomic, strong) SparkyInfoRow *catalogState;
 @property (nonatomic, strong) NSArray<SparkyInfoRow *> *extraRows;
 @property (nonatomic, strong) NSArray<SparkyInfoRow *> *memoryRows;
 @property (nonatomic, strong) NSArray<NSString *> *extras;
@@ -103,8 +102,11 @@ static NSString *Str(const char *s) { return s ? [NSString stringWithUTF8String:
 @property (nonatomic) BOOL modelsDirty;
 @property (nonatomic) BOOL loadEnabled;
 @property (nonatomic) BOOL hasCLI;
+@property (nonatomic, strong) NSTimer *profileSpinnerTimer;
+@property (nonatomic) NSUInteger profileSpinnerFrame;
 - (void)buildMain;
 - (void)buildModels;
+- (void)setProfilesLoading:(BOOL)loading;
 - (void)performBlock:(dispatch_block_t)block;
 @end
 
@@ -120,6 +122,52 @@ static NSMenuItem *Action(NSString *title, SEL selector, id target, NSString *ke
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:selector keyEquivalent:key ?: @""];
     item.target = target;
     return item;
+}
+// AppKit centers the state image on the whole item, including its subtitle.
+static NSImage *ProfileCheckmark(void) {
+    static NSImage *checkmark;
+    if (!checkmark) {
+        checkmark = [NSImage imageWithSize:NSMakeSize(16, 24) flipped:NO drawingHandler:^BOOL(NSRect rect) {
+            NSBezierPath *stroke = [NSBezierPath bezierPath];
+            [stroke moveToPoint:NSMakePoint(1.5, 16.5)];
+            [stroke lineToPoint:NSMakePoint(4.5, 13.5)];
+            [stroke lineToPoint:NSMakePoint(10.0, 21.0)];
+            stroke.lineWidth = 1.65;
+            stroke.lineCapStyle = NSLineCapStyleRound;
+            stroke.lineJoinStyle = NSLineJoinStyleRound;
+            [NSColor.blackColor setStroke];
+            [stroke stroke];
+            return YES;
+        }];
+        checkmark.template = YES;
+    }
+    return checkmark;
+}
+static NSArray<NSImage *> *ProfileSpinnerFrames(void) {
+    static NSArray<NSImage *> *frames;
+    if (!frames) {
+        NSMutableArray<NSImage *> *images = [NSMutableArray array];
+        for (NSUInteger frame = 0; frame < 8; frame++) {
+            NSImage *image = [NSImage imageWithSize:NSMakeSize(15, 15) flipped:NO drawingHandler:^BOOL(NSRect rect) {
+                for (NSUInteger spoke = 0; spoke < 8; spoke++) {
+                    CGFloat angle = spoke * M_PI / 4.0;
+                    NSInteger age = (frame + 8 - spoke) % 8;
+                    [[NSColor.blackColor colorWithAlphaComponent:1.0 - 0.11 * age] setStroke];
+                    NSBezierPath *line = [NSBezierPath bezierPath];
+                    line.lineWidth = 1.35;
+                    line.lineCapStyle = NSLineCapStyleRound;
+                    [line moveToPoint:NSMakePoint(7.5 + 3.3 * cos(angle), 7.5 - 3.3 * sin(angle))];
+                    [line lineToPoint:NSMakePoint(7.5 + 6.0 * cos(angle), 7.5 - 6.0 * sin(angle))];
+                    [line stroke];
+                }
+                return YES;
+            }];
+            image.template = YES;
+            [images addObject:image];
+        }
+        frames = [images copy];
+    }
+    return frames;
 }
 static NSMenuItem *Info(NSView *row) {
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
@@ -145,7 +193,6 @@ static NSMenuItem *Info(NSView *row) {
         self.requests = [[SparkyInfoRow alloc] initSmall:NO strong:NO pair:YES];
         self.footer = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
         self.result = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
-        self.catalogState = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
         [self.model setLeft:@"Waiting for status" right:@""];
         self.modelItem = Action(@"Waiting for status", NULL, nil, @"");
         self.loadItem = Action(@"Switch Profile", NULL, nil, @"");
@@ -206,22 +253,48 @@ static NSMenuItem *Info(NSView *row) {
 - (void)buildModels {
     [self.models removeAllItems];
     NSString *caption = self.pickerCaption;
-    [self.catalogState setLeft:caption right:@""];
-    self.catalogItem = Info(self.catalogState);
+    self.catalogItem = Action(caption, NULL, nil, @"");
+    self.catalogItem.enabled = NO;
     self.catalogItem.hidden = self.choiceIDs.count && [self.pickerCaption isEqualToString:@"Select a profile"];
     [self.models addItem:self.catalogItem];
     for (NSUInteger i = 0; i < self.choiceIDs.count; i++) {
         NSMenuItem *item = Action(self.choiceLabels[i], @selector(choose:), self, @"");
         item.representedObject = self.choiceIDs[i];
         NSString *description = self.choiceDescriptions[i];
-        if (@available(macOS 14.4, *))
-            item.subtitle = description.length ? description : nil;
+        if (@available(macOS 14.4, *)) {
+            if (description.length) {
+                item.subtitle = description;
+                item.onStateImage = ProfileCheckmark();
+            }
+        }
         item.toolTip = description.length ? description : self.choiceLabels[i];
         item.state = [self.choiceIDs[i] isEqualToString:self.selectedProfile] ? NSControlStateValueOn : NSControlStateValueOff;
         item.enabled = self.loadEnabled && self.hasCLI;
         [self.models addItem:item];
     }
     self.modelsDirty = NO;
+}
+- (void)setProfilesLoading:(BOOL)loading {
+    if (!loading) {
+        if (self.profileSpinnerTimer) {
+            [self.profileSpinnerTimer invalidate];
+            self.profileSpinnerTimer = nil;
+            self.loadItem.image = nil;
+        }
+        return;
+    }
+    if (self.profileSpinnerTimer) return;
+    NSArray<NSImage *> *frames = ProfileSpinnerFrames();
+    self.profileSpinnerFrame = 0;
+    self.loadItem.image = frames[0];
+    __weak SparkyMenuController *weakSelf = self;
+    self.profileSpinnerTimer = [NSTimer timerWithTimeInterval:0.10 repeats:YES block:^(NSTimer *timer) {
+        SparkyMenuController *controller = weakSelf;
+        controller.profileSpinnerFrame = (controller.profileSpinnerFrame + 1) % frames.count;
+        controller.loadItem.image = frames[controller.profileSpinnerFrame];
+    }];
+    [NSRunLoop.mainRunLoop addTimer:self.profileSpinnerTimer forMode:NSRunLoopCommonModes];
+    [NSRunLoop.mainRunLoop addTimer:self.profileSpinnerTimer forMode:NSEventTrackingRunLoopMode];
 }
 - (void)menuNeedsUpdate:(NSMenu *)menu {
     if (menu == self.menu && self.mainDirty) [self buildMain];
@@ -351,7 +424,7 @@ void sparky_set_requests(const char *label, const char *value) {
     NSString *l=Str(label), *v=Str(value);
     OnMain(^{ [Controller().requests setLeft:l right:v]; });
 }
-void sparky_set_picker(int picking, const char *caption, const char **labels, const char **ids,
+void sparky_set_picker(int loading, const char *caption, const char **labels, const char **ids,
                        const char **descriptions, int count, const char *selected) {
     NSString *cap=Str(caption), *current=Str(selected);
     NSMutableArray *l=[NSMutableArray array], *v=[NSMutableArray array], *d=[NSMutableArray array];
@@ -366,7 +439,8 @@ void sparky_set_picker(int picking, const char *caption, const char **labels, co
             || ![c.choiceDescriptions isEqualToArray:d];
         BOOL selectionChanged = ![current isEqualToString:c.selectedProfile];
         c.pickerCaption=cap; c.choiceLabels=l; c.choiceIDs=v; c.choiceDescriptions=d; c.selectedProfile=current;
-        [c.catalogState setLeft:cap right:@""];
+        [c setProfilesLoading:loading != 0];
+        c.catalogItem.title = cap;
         c.catalogItem.hidden = v.count && [cap isEqualToString:@"Select a profile"];
         if (changed) { c.modelsDirty=YES; if (!c.modelTracking) [c buildModels]; }
         if (selectionChanged) {
@@ -429,6 +503,10 @@ char *sparky_probe_choice_subtitle(const char *id) {
         return item.toolTip ? strdup(item.toolTip.UTF8String) : NULL;
     }
     return NULL;
+}
+int sparky_probe_profile_spinner(void) {
+    SparkyMenuController *c = Controller();
+    return c.profileSpinnerTimer != nil && c.loadItem.image != nil;
 }
 char *sparky_probe_picker_caption(void) { return strdup(Controller().pickerCaption.UTF8String); }
 char *sparky_probe_layout(int picking) {

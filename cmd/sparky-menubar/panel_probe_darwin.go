@@ -78,3 +78,5 @@ func probeChoiceSubtitle(id string) string {
 	defer C.free(unsafe.Pointer(p))
 	return C.GoString(p)
 }
+
+func probeProfileSpinner() bool { return C.sparky_probe_profile_spinner() != 0 }

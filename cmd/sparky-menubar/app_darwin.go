@@ -15,6 +15,7 @@ import (
 
 const (
 	catalogBound = 30 * time.Second
+	catalogFresh = 20 * time.Second
 	pbcopyBound  = 5 * time.Second
 	uiTick       = time.Second
 	loadTick     = time.Second
@@ -60,6 +61,7 @@ type menuApp struct {
 	profiles      []menubarui.Choice
 	profileResult string
 	catalogBusy   bool
+	catalogAt     time.Time
 	catalogErr    string // short friendly text of the last failed catalog fetch
 	picking       bool
 
@@ -96,7 +98,7 @@ func (a *menuApp) onReady() {
 	}
 	a.poller.Start()
 	a.refreshAsync()
-	a.loadProfilesAsync()
+	a.loadProfilesAsync(false)
 }
 
 // watchShutdown lets the UI loops stop promptly when quit is clicked. It never
@@ -164,13 +166,16 @@ func (a *menuApp) renderLocked() {
 		v.LoadResult = a.profileResult
 	}
 	v.PickerCaption = a.pickerCaption()
-	var descriptions []string
-	if a.catalogErr == "" {
-		for _, choice := range a.profiles {
-			v.Choices = append(v.Choices, choice.Name)
-			v.ChoiceIDs = append(v.ChoiceIDs, choice.ID)
-			descriptions = append(descriptions, choice.Description)
-		}
+	initialProfilesPending := a.ctrl != nil && a.profiles == nil && a.catalogErr == ""
+	if initialProfilesPending {
+		v.LoadRowLabel = "Loading profiles…"
+		v.LoadEnabled = false
+	}
+	descriptions := make([]string, 0, len(a.profiles))
+	for _, choice := range a.profiles {
+		v.Choices = append(v.Choices, choice.Name)
+		v.ChoiceIDs = append(v.ChoiceIDs, choice.ID)
+		descriptions = append(descriptions, choice.Description)
 	}
 
 	panelSetContent(panelStrings{
@@ -192,7 +197,7 @@ func (a *menuApp) renderLocked() {
 	}
 	panelSetMemoryRows(pairs)
 	panelSetRequests(v.RequestsRow.Label, v.RequestsRow.Value)
-	panelSetPicker(v.Picking, v.PickerCaption, v.Choices, v.ChoiceIDs, descriptions, snap.ProfileName)
+	panelSetPicker(initialProfilesPending, v.PickerCaption, v.Choices, v.ChoiceIDs, descriptions, snap.ProfileName)
 	panelSetEnabled(v.LoadEnabled, v.RefreshEnabled, v.HasCLI)
 	panelSetSettings(v.ShowTitle, menubarui.LoginEnabled())
 
@@ -209,7 +214,7 @@ func (a *menuApp) renderLocked() {
 // error, or default instructions. Must be called with uiMu held.
 func (a *menuApp) pickerCaption() string {
 	switch {
-	case a.catalogErr != "":
+	case a.catalogErr != "" && len(a.profiles) == 0:
 		return "Profile list unavailable: " + a.catalogErr
 	case a.catalogBusy && a.profiles == nil:
 		return "Loading profiles…"
@@ -274,13 +279,14 @@ func (a *menuApp) panelOpened() {
 	if a.poller != nil {
 		a.poller.Request()
 	}
+	a.loadProfilesAsync(false)
 	a.requestRender()
 }
 
 // panelRefresh is the Refresh status row / manual refresh.
 func (a *menuApp) panelRefresh() {
 	a.refreshAsync()
-	a.loadProfilesAsync()
+	a.loadProfilesAsync(true)
 	a.requestRender()
 }
 
@@ -294,7 +300,7 @@ func (a *menuApp) refreshAsync() {
 	}()
 }
 
-// panelPickerOpen opens the model picker (idempotent) and requests the catalog.
+// panelPickerOpen opens the cached profile picker.
 func (a *menuApp) panelPickerOpen() {
 	a.uiMu.Lock()
 	if a.done || a.ctrl == nil {
@@ -303,7 +309,6 @@ func (a *menuApp) panelPickerOpen() {
 	}
 	a.picking = true
 	a.uiMu.Unlock()
-	a.loadProfilesAsync()
 	a.requestRender()
 }
 
@@ -322,7 +327,7 @@ func (a *menuApp) panelPickerClose() {
 // panelChoose reserves one switch and previews the changes off the UI thread.
 func (a *menuApp) panelChoose(id string) {
 	a.uiMu.Lock()
-	if a.done || a.ctrl == nil || a.catalogErr != "" {
+	if a.done || a.ctrl == nil {
 		a.uiMu.Unlock()
 		return
 	}
@@ -442,9 +447,9 @@ func (a *menuApp) panelCopyDiagnostics() {
 
 // loadProfilesAsync coalesces fetches and records failures so the picker and
 // diagnostics can show a real error instead of a silent empty list.
-func (a *menuApp) loadProfilesAsync() {
+func (a *menuApp) loadProfilesAsync(force bool) {
 	a.uiMu.Lock()
-	if a.ctrl == nil || a.done || a.catalogBusy {
+	if a.ctrl == nil || a.done || a.catalogBusy || (!force && time.Since(a.catalogAt) < catalogFresh) {
 		a.uiMu.Unlock()
 		return
 	}
@@ -458,6 +463,7 @@ func (a *menuApp) loadProfilesAsync() {
 		profiles, err := a.ctrl.Profiles(ctx)
 		a.uiMu.Lock()
 		a.catalogBusy = false
+		a.catalogAt = time.Now()
 		done := a.done
 		if err != nil {
 			a.catalogErr = menubarui.FriendlyError(err)

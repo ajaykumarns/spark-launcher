@@ -105,7 +105,7 @@ func panelSetRequests(label, value string) {
 	C.sparky_set_requests(lab, val)
 }
 
-func panelSetPicker(picking bool, caption string, labels, ids, descriptions []string, selected string) {
+func panelSetPicker(loading bool, caption string, labels, ids, descriptions []string, selected string) {
 	cap := cstr(caption)
 	defer freeC([]*C.char{cap})
 	lab, n := cstrSlice(labels)
@@ -115,7 +115,7 @@ func panelSetPicker(picking bool, caption string, labels, ids, descriptions []st
 	desc, _ := cstrSlice(descriptions)
 	defer freeC(desc)
 	p := C.int(0)
-	if picking {
+	if loading {
 		p = 1
 	}
 	current := cstr(selected)
