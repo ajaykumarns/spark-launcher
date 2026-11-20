@@ -405,21 +405,12 @@ func validateCluster(c Object) error {
 			seen[low] = true
 		}
 	}
-	shared := value(policy, "comfyui_shared_llms", []any{})
-	if !validStrings(shared) {
-		return fail("ComfyUI shared models must be a list.")
-	}
-	for _, name := range stringsOf(shared) {
-		if str(obj(models[name])["kind"]) != "llm" {
-			return fail("ComfyUI shared models must name configured language models.")
-		}
-	}
 	floor := value(policy, "comfyui_min_available_gib", 0)
 	if !finite(floor) || num(floor) < 0 {
 		return fail("ComfyUI memory minimum must be a finite nonnegative number.")
 	}
-	if !boolean(value(policy, "comfyui_exclusive_with_llms", true)) && (len(arr(shared)) == 0 || num(floor) <= 0) {
-		return fail("Shared ComfyUI jobs require a language model allowlist and a positive memory minimum.")
+	if !boolean(value(policy, "comfyui_exclusive_with_llms", true)) && num(floor) <= 0 {
+		return fail("Shared ComfyUI jobs require a positive memory minimum.")
 	}
 	for _, n := range stringsOf(policy["protected_models"]) {
 		if !boolean(obj(models[n])["keep_loaded"]) {

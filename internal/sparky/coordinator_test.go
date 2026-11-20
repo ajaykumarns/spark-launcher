@@ -44,7 +44,6 @@ func testConfig(root string) Object {
 		},
 		"policy": Object{"interrupt_active_jobs": false, "protected_models": []any{},
 			"comfyui_exclusive_with_llms": false,
-			"comfyui_shared_llms":         []any{"qwen"},
 			"comfyui_min_available_gib":   18},
 		"models": Object{
 			"qwen":     Object{"kind": "llm", "name": "qwen", "run_on": "spark02", "settings": settings("qwen", "http://127.0.0.1:8001"), "aliases": []any{}},
@@ -476,7 +475,7 @@ func (e *testEnv) admit() Object {
 	return result
 }
 
-func TestEightAllowedLLMLeasesShareImage(t *testing.T) {
+func TestEightLLMLeasesShareImage(t *testing.T) {
 	env := comfyEnv(t, imageGraph())
 	env.dev.Units = map[string]string{"qwen.service": "active"}
 	for i := 0; i < 8; i++ {
@@ -498,22 +497,22 @@ func TestEightAllowedLLMLeasesShareImage(t *testing.T) {
 	env.waitForAdmission("comfyui@spark02")
 	// FIFO correctly keeps the LLM behind the queued exclusive image, so the
 	// image job is cancelled (as the engine would for a finished prompt)
-	// before the allowed LLM can share the device.
+	// before the LLM can share the device.
 	env.coord.CancelJob("spark02", "x1")
 	if _, err := env.coord.acquire(context.Background(), "qwen", []string{"spark02"}, false, 0, "x2", "", true); err != nil {
-		t.Fatalf("allowed LLMs keep sharing: %v", err)
+		t.Fatalf("LLMs keep sharing: %v", err)
 	}
 }
 
-func TestUnapprovedLoadedLLMNeverUnloaded(t *testing.T) {
+func TestSharedImageAdmitsWithAnotherLoadedModel(t *testing.T) {
 	env := comfyEnv(t, imageGraph())
 	env.dev.Units = map[string]string{"nemotron.service": "active"}
-	result := env.admit()
-	if result["reason"] != "unapproved_loaded_llm" || result["token"] != nil {
-		t.Fatalf("unapproved LLM must block the shared image: %v", result)
+	if got, err := env.coord.acquire(context.Background(), "nemotron", []string{"spark02"}, false, 0, "decision", "", false); err != nil || got == "" {
+		t.Fatalf("model lease expected: %q %v", got, err)
 	}
-	if leaseCount(env.coord) != 0 {
-		t.Fatalf("no lease may survive a refused admission: %d", leaseCount(env.coord))
+	result := env.admit()
+	if result["status"] != "admitted" || result["shared"] != true || leaseCount(env.coord) != 2 {
+		t.Fatalf("image and model must keep their leases: %v", result)
 	}
 }
 
@@ -644,10 +643,10 @@ func TestReconcileAdoptsExecutingEngineJob(t *testing.T) {
 	if !leaseNames(env.coord)["comfyui@spark02"] {
 		t.Fatalf("executing engine job must be adopted: %v", leaseNames(env.coord))
 	}
-	// The adopted shared job coexists with allowed LLM leases but not with
+	// The adopted shared job coexists with LLM leases but not with
 	// exclusive ones under the default policy.
 	if got, _ := env.coord.acquire(context.Background(), "qwen", []string{"spark02"}, false, 0, "after-adopt", "", false); got == "" {
-		t.Fatal("allowed LLM must share with the adopted job")
+		t.Fatal("the LLM must share with the adopted job")
 	}
 	if got, _ := env.coord.acquire(context.Background(), "qwen", []string{"spark02"}, true, 0, "after-adopt-x", "", false); got != "" {
 		t.Fatal("exclusive LLM start must wait for the adopted job")
@@ -978,22 +977,8 @@ func recordEnv(t *testing.T) *testEnv {
 	if err := env.rt.TransitionState("qwen", gen, StateReady); err != nil {
 		t.Fatal(err)
 	}
-	// The recipe disappears from the current central config. The central
+	// The durable record keeps the recipe after it leaves the catalog.
 	delete(obj(cfg["models"]), "qwen")
-	// config must stay VALID after the deletion: the shared allowlist may
-	// only name configured language models, and an empty allowlist is only
-	// valid in exclusive mode. The validator is never weakened — the frozen
-	// record retains the original whole cfg/policy.
-	shared := []any{}
-	for _, n := range stringsOf(obj(cfg["policy"])["comfyui_shared_llms"]) {
-		if n != "qwen" {
-			shared = append(shared, n)
-		}
-	}
-	obj(cfg["policy"])["comfyui_shared_llms"] = shared
-	if len(shared) == 0 {
-		obj(cfg["policy"])["comfyui_exclusive_with_llms"] = true
-	}
 	if err := writeCluster(env.rt.Path, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -1143,13 +1128,8 @@ func TestLoadRefusesDeletedProtectedLoadedModel(t *testing.T) {
 	if err := env.rt.TransitionState("qwen", gen, StateReady); err != nil {
 		t.Fatal(err)
 	}
-	// The protected recipe disappears from the current central config; the
-	// central config must stay VALID after the deletion (the shared
-	// allowlist may only name configured language models). The frozen
-	// record retains the original whole cfg/policy with keep_loaded=true.
+	// The durable record keeps the policy after the recipe leaves the catalog.
 	delete(obj(cfg["models"]), "qwen")
-	obj(cfg["policy"])["comfyui_shared_llms"] = []any{}
-	obj(cfg["policy"])["comfyui_exclusive_with_llms"] = true
 	if err := writeCluster(env.rt.Path, cfg); err != nil {
 		t.Fatal(err)
 	}

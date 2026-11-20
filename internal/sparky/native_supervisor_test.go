@@ -109,7 +109,7 @@ func (e *supEnv) writeCentral(placement string) {
 		"version": 1, "root": e.root, "controller_port": 8020, "lifecycle": "native",
 		"nodes": Object{"spark01": Object{"direct_ip": "10.0.0.1"}, "spark02": Object{"direct_ip": "10.0.0.2", "ssh": "spark02h"}},
 		"policy": Object{"interrupt_active_jobs": false, "protected_models": []any{},
-			"comfyui_exclusive_with_llms": true, "comfyui_shared_llms": []any{}, "comfyui_min_available_gib": 18},
+			"comfyui_exclusive_with_llms": true, "comfyui_min_available_gib": 18},
 		"models": Object{"glm": Object{"kind": "llm", "name": "GLM", "run_on": placement,
 			"keep_loaded": false, "reasoning": true, "aliases": []any{}, "settings": settings}},
 	}

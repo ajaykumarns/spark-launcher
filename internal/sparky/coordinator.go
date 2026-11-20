@@ -239,8 +239,9 @@ func conflicts(cfg Object, aName string, aNodes []string, aExclusive bool, bName
 		return strings.HasPrefix(aName, "comfyui@")
 	}
 	if sharedComfy(cfg) {
-		allowed := stringsOf(obj(cfg["policy"])["comfyui_shared_llms"])
-		if strings.HasPrefix(aName, "comfyui@") && contains(allowed, bName) || strings.HasPrefix(bName, "comfyui@") && contains(allowed, aName) {
+		models := obj(cfg["models"])
+		if strings.HasPrefix(aName, "comfyui@") && str(obj(models[bName])["kind"]) == "llm" ||
+			strings.HasPrefix(bName, "comfyui@") && str(obj(models[aName])["kind"]) == "llm" {
 			return false
 		}
 	}
@@ -1318,8 +1319,8 @@ var comfyAcquireBudget = 30 * time.Second
 // real engine queue. The caller's cpu_only flag is never trusted alone: the
 // exact workflow at the engine is inspected, and only a nonempty graph made
 // exclusively of SparkyProbe nodes runs without a GPU reservation. GPU jobs
-// respect the shared-LLM allowlist and the minimum available memory; they
-// never unload a model to make room.
+// check the minimum available memory in shared mode and never unload a model
+// to make room.
 func (c *Coordinator) ComfyAcquire(node, promptID string, cpuOnly bool) (Object, error) {
 	cfg := c.cfg()
 	if _, known := obj(cfg["nodes"])[node]; !known || node == "" {
@@ -1439,27 +1440,8 @@ func (c *Coordinator) ComfyAcquire(node, promptID string, cpuOnly bool) (Object,
 		}
 		if shared {
 			policy := obj(cfg["policy"])
-			allowed := stringsOf(policy["comfyui_shared_llms"])
-			unsupported := []string{}
-			for _, n := range conflicts {
-				if !contains(allowed, n) {
-					unsupported = append(unsupported, n)
-				}
-			}
 			available := num(obj(obj(obj(snapshot["nodes"])[node])["memory_bytes"])["MemAvailable"])
 			minimum := num(policy["comfyui_min_available_gib"]) * 1024 * 1024 * 1024
-			for _, n := range conflicts {
-				if !contains(allowed, n) {
-					unsupported = append(unsupported, n)
-				}
-			}
-			if len(unsupported) > 0 {
-				// The waiting response keeps the memory fields so the caller
-				// can see why the GPU is unavailable, exactly like Python.
-				releaseOwned()
-				return Object{"status": "waiting", "retry_after": 2, "reason": "unapproved_loaded_llm",
-					"available_bytes": available, "minimum_bytes": minimum}, nil
-			}
 			if available < minimum {
 				// Only this engine's idle cache may be released, exactly
 				// once per validation; an LLM is never stopped to make room

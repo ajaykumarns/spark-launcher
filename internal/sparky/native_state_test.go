@@ -25,8 +25,8 @@ func nativeTestConfig(root, backend string) Object {
 		"policy": Object{"interrupt_active_jobs": false, "protected_models": []any{},
 			// Native lifecycle tests never exercise shared image jobs; the
 			// cluster validator requires either exclusivity or a nonempty
-			// shared allowlist plus a positive memory minimum.
-			"comfyui_exclusive_with_llms": true, "comfyui_shared_llms": []any{}, "comfyui_min_available_gib": 18},
+			// a positive memory minimum.
+			"comfyui_exclusive_with_llms": true, "comfyui_min_available_gib": 18},
 		"models": Object{
 			"glm": Object{"kind": "llm", "name": "GLM 5.3 Flash", "run_on": "spark01", "keep_loaded": false,
 				"reasoning": true, "aliases": []any{},
