@@ -54,7 +54,7 @@ func TestPanelReadyMatchesReferenceHierarchy(t *testing.T) {
 	if v.RequestsRow.Label != "Active requests" || v.RequestsRow.Value != "0" {
 		t.Fatalf("requests = %+v", v.RequestsRow)
 	}
-	if v.LoadRowLabel != "Switch profile…" || v.RefreshRowLabel != "Refresh status" {
+	if v.LoadRowLabel != "Switch Profile" || v.RefreshRowLabel != "Refresh status" {
 		t.Fatalf("rows = %q/%q", v.LoadRowLabel, v.RefreshRowLabel)
 	}
 	if !strings.HasPrefix(v.Footer, "Updated ") {
@@ -524,5 +524,17 @@ func TestPanelNoCLI(t *testing.T) {
 	}
 	if v.ModelName != "Unknown" {
 		t.Fatalf("model = %q", v.ModelName)
+	}
+}
+
+func TestPanelShowsOptionalProfileDescription(t *testing.T) {
+	s := Snapshot{ProfileName: "daily", ProfileDescription: "Chat and\ntranscription", UpdatedAt: time.Now()}
+	view := BuildPanel(s, Prefs{}, nil, false, true)
+	if view.ModelName != "Profile: daily" || view.ModelLocation != "Chat and transcription" {
+		t.Fatalf("profile header = %q, %q", view.ModelName, view.ModelLocation)
+	}
+	s.ProfileDescription = ""
+	if subtitle := BuildPanel(s, Prefs{}, nil, false, true).ModelLocation; subtitle != "" {
+		t.Fatalf("profile without a description shows %q", subtitle)
 	}
 }

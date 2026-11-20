@@ -341,6 +341,7 @@ func TestMainRemoteCommandsThroughFakeRunner(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"profile", "list"},
+		{"profiles", "list"},
 		{"profile", "plan", "daily"},
 		{"profile", "apply", "daily", "--expect-plan", "example"},
 	} {

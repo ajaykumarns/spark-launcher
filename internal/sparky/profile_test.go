@@ -485,3 +485,31 @@ func TestProfileOCRCanMoveBetweenSparks(t *testing.T) {
 		t.Fatalf("incorrect OCR move: %+v", plan)
 	}
 }
+
+func TestProfileCapabilityTables(t *testing.T) {
+	groups := []any{
+		Object{"name": "chat", "state": "partial", "providers": []any{
+			Object{"workload": "glm", "nodes": []any{"spark01"}, "ready": true},
+			Object{"workload": "second-model", "nodes": []any{"spark02"}, "ready": false},
+		}},
+		Object{"name": "ocr", "state": "available", "providers": []any{
+			Object{"workload": "spark-ocr", "nodes": []any{"spark01"}, "ready": true},
+		}},
+	}
+	snapshot := Object{"profile": Object{"name": "daily", "capabilities": groups}}
+	got := formatStatus(snapshot, 100, false)
+	for _, want := range []string{"Live capabilities", "AVAILABILITY", "PLACEMENT", "Partial", "second-model (unavailable)", "OCR", "spark02"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("status is missing %q:\n%s", want, got)
+		}
+	}
+	profiles := Object{"selected": "daily", "profiles": []any{Object{
+		"name": "daily", "description": "Chat and document reading", "capabilities": groups,
+	}}}
+	got = formatProfileList(profiles, 100, false)
+	for _, want := range []string{"CAPABILITIES", "daily (selected)", "Chat and document reading", "Chat, OCR"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("profile list is missing %q:\n%s", want, got)
+		}
+	}
+}
