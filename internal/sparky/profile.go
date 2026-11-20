@@ -113,8 +113,8 @@ func (file profileFile) profile(name string, cfg Object) (clusterProfile, error)
 			var nodes []string
 			canonical := id
 			if id == "spark-ocr" {
-				if on != "spark01" {
-					return p, fail("Spark OCR is available only on spark01.")
+				if len(placements[on]) != 1 {
+					return p, fail("Give Spark OCR an explicit single Spark.")
 				}
 				nodes = []string{on}
 			} else {
@@ -176,38 +176,6 @@ func listProfiles(root string) (Object, error) {
 		profiles = append(profiles, row)
 	}
 	return Object{"profiles": profiles, "selected": str(selectedProfile(cfg)["name"])}, nil
-}
-
-func renderProfileList(data Object) string {
-	var out strings.Builder
-	for _, raw := range arr(data["profiles"]) {
-		row := obj(raw)
-		name := str(row["name"])
-		if name == str(data["selected"]) {
-			name += " (last applied)"
-		}
-		if problem := str(row["error"]); problem != "" {
-			fmt.Fprintf(&out, "%s — %s\n", name, problem)
-			continue
-		}
-		var groups []string
-		for _, group := range arr(row["capabilities"]) {
-			groups = append(groups, str(obj(group)["name"]))
-		}
-		if len(groups) == 0 {
-			groups = []string{"no capabilities"}
-		}
-		groupList := strings.Join(groups, ", ")
-		if description := strings.Join(strings.Fields(str(row["description"])), " "); description != "" {
-			fmt.Fprintf(&out, "%s — %s (%s)\n", name, description, groupList)
-		} else {
-			fmt.Fprintf(&out, "%s — %s\n", name, groupList)
-		}
-	}
-	if out.Len() == 0 {
-		return "No profiles defined.\n"
-	}
-	return out.String()
 }
 
 func profileCapability(name string, model Object) string {
@@ -420,21 +388,12 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 		if err != nil {
 			return nil, err
 		}
-		if profileServicePlacement(p.capabilities, "spark-ocr") == "spark01" {
-			if profileOCRRunning(snapshot) {
-				checkProfileOCR(snapshot)
-			} else {
-				ocr, err := newOCRService(rt.root())
-				if err != nil {
-					return nil, err
-				}
-				source, err := ocr.ocrSource()
-				if err != nil {
-					return nil, err
-				}
-				snapshot["ocr_installed"] = ocrFileExists(filepath.Join(source, "deploy", "compose.yaml")) &&
-					ocrFileExists(ocr.ocrEnvFile(source))
+		if node := profileServicePlacement(p.capabilities, "spark-ocr"); node != "" {
+			status, err := rt.profileOCR(ctx, node, "status")
+			if err != nil {
+				return nil, err
 			}
+			snapshot["profile_ocr"] = status
 		}
 		return planProfile(cfg, p, snapshot, func(m profileModel) bool {
 			return rt.nativeReady(ctx, m.name, m.model, m.recipe, m.nodes, m.placement)
@@ -550,8 +509,10 @@ func selectedProfile(cfg Object) Object {
 
 func (c *Coordinator) runningProfileCapabilities(ctx context.Context, groups []any, snapshot Object) []any {
 	cfg := c.cfg()
-	if profileServicePlacement(groups, "spark-ocr") == "spark01" {
-		checkProfileOCR(snapshot)
+	if node := profileServicePlacement(groups, "spark-ocr"); node != "" && profileOCRRunning(snapshot, node) {
+		if status, err := c.runtime.profileOCR(ctx, node, "status"); err == nil {
+			snapshot["profile_ocr"] = status
+		}
 	}
 	kept := planProfileServices(cfg, groups, snapshot).keep
 	return profileAvailability(groups, func(provider Object) bool {

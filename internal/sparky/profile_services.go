@@ -58,35 +58,51 @@ func planProfileServices(cfg Object, groups []any, snapshot Object) profileServi
 		plan.addComfy(cfg, snapshot, node, imageNode == node)
 	}
 
-	ocrWanted := profileServicePlacement(groups, "spark-ocr") == "spark01"
-	ocrRunning := profileOCRRunning(snapshot)
-	switch {
-	case ocrWanted && ocrRunning:
-		if boolean(snapshot["ocr_ready"]) {
-			plan.add("keep", "spark-ocr", "spark01", "ocr")
-		} else {
-			plan.blockers = append(plan.blockers, "Spark OCR is running without a ready API on spark01.")
+	ocrNode := profileServicePlacement(groups, "spark-ocr")
+	ocrStatus := obj(snapshot["profile_ocr"])
+	for _, node := range keys(obj(snapshot["nodes"])) {
+		running, wanted := profileOCRRunning(snapshot, node), ocrNode == node
+		switch {
+		case wanted && running && boolean(ocrStatus["api_ready"]):
+			plan.add("keep", "spark-ocr", node, "ocr")
+		case wanted && running:
+			plan.blockers = append(plan.blockers, fmt.Sprintf("Spark OCR is running without a ready API on %s.", node))
+		case wanted && boolean(ocrStatus["installed"]):
+			plan.add("start", "spark-ocr", node, "ocr")
+		case wanted:
+			plan.blockers = append(plan.blockers, fmt.Sprintf("Install OCR on %s before applying this profile.", node))
+		case running:
+			plan.add("stop", "spark-ocr", node, "ocr")
 		}
-	case ocrWanted && boolean(snapshot["ocr_installed"]):
-		plan.add("start", "spark-ocr", "spark01", "ocr")
-	case ocrWanted:
-		plan.blockers = append(plan.blockers, "Install Spark01 OCR before applying this profile.")
-	case ocrRunning:
-		plan.add("stop", "spark-ocr", "spark01", "ocr")
 	}
 	return plan
 }
 
-func profileOCRRunning(snapshot Object) bool {
-	containers := obj(obj(obj(snapshot["nodes"])["spark01"])["containers"])
+func profileOCRRunning(snapshot Object, node string) bool {
+	containers := obj(obj(obj(snapshot["nodes"])[node])["containers"])
 	return boolean(obj(containers["spark-ocr"])["running"])
 }
 
-func checkProfileOCR(snapshot Object) {
-	if profileOCRRunning(snapshot) {
-		health, err := ocrHealth(ocrHealthURL, 3*time.Second)
-		snapshot["ocr_ready"] = err == nil && str(health["service"]) == "spark-ocr"
+func (r *Runtime) profileOCR(ctx context.Context, node, action string) (Object, error) {
+	payload := Object{"action": action}
+	if node == "spark01" {
+		return ManageOCR(r.root(), payload)
 	}
+	host := str(obj(obj(r.config()["nodes"])[node])["ssh"])
+	if err := safeHost(host); err != nil {
+		return nil, err
+	}
+	args := []string{"ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host,
+		remoteSparkyPrefix + shellJoin([]string{"ocr", "--root", r.root(), "--payload", "-"})}
+	timeout := 2 * time.Minute
+	if action == "status" {
+		timeout = 20 * time.Second
+	}
+	out, err := r.runChecked(ctx, args, jsonBytes(payload), timeout)
+	if err != nil {
+		return nil, err
+	}
+	return decode([]byte(out))
 }
 
 func (p *profileServicePlan) addComfy(cfg, snapshot Object, node string, wanted bool) {
@@ -124,7 +140,7 @@ func (c *Coordinator) applyProfileService(ctx context.Context, rt *Runtime, kind
 	case "audio":
 		return rt.applyProfileAudio(ctx, step)
 	case "ocr":
-		_, err := ManageOCR(rt.root(), Object{"action": action})
+		_, err := rt.profileOCR(ctx, stringsOf(step["nodes"])[0], action)
 		return err
 	case "comfyui":
 		node := stringsOf(step["nodes"])[0]

@@ -57,7 +57,7 @@ func TestProfileApplyNativeLifecycle(t *testing.T) {
 	rows := arr(listed["profiles"])
 	if str(obj(rows[0])["name"]) != "dual" || obj(rows[0])["description"] != nil ||
 		str(obj(rows[2])["name"]) != "single" || str(obj(rows[2])["description"]) != description ||
-		!strings.Contains(renderProfileList(listed), description) {
+		!strings.Contains(formatProfileList(listed, 100, false), description) {
 		t.Fatalf("list should show descriptions where defined: %v", listed)
 	}
 
@@ -453,5 +453,35 @@ func TestProfileCanStopFailedOwnedModel(t *testing.T) {
 	result = planProfile(nil, clusterProfile{}, snapshot, ready)
 	if !boolean(result["blocked"]) || len(arr(result["steps"])) != 0 {
 		t.Fatalf("an unowned model cannot be stopped: %v", result)
+	}
+}
+
+func TestProfileOCRCanMoveBetweenSparks(t *testing.T) {
+	cfg := Object{"root": "/srv/spark", "nodes": Object{"spark01": Object{}, "spark02": Object{"ssh": "worker"}}}
+	rt := newRuntime(cfg, "/srv/spark/config/models.json")
+	rt.Run = func(_ context.Context, args []string, stdin []byte) (CommandResult, error) {
+		want := remoteSparkyPrefix + shellJoin([]string{"ocr", "--root", "/srv/spark", "--payload", "-"})
+		if args[len(args)-2] != "worker" || args[len(args)-1] != want {
+			t.Fatalf("wrong OCR target or command: %v", args)
+		}
+		if payload, err := decode(stdin); err != nil || str(payload["action"]) != "status" {
+			t.Fatalf("wrong OCR payload: %q", stdin)
+		}
+		return CommandResult{Out: `{"installed":true,"running":false,"api_ready":false}`}, nil
+	}
+	ocr, err := rt.profileOCR(context.Background(), "spark02", "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := []any{Object{"name": "ocr", "providers": []any{Object{"workload": "spark-ocr", "nodes": []any{"spark02"}}}}}
+	snapshot := Object{"nodes": Object{
+		"spark01": Object{"containers": Object{"spark-ocr": Object{"running": true}}},
+		"spark02": Object{"containers": Object{"spark-ocr": Object{"running": false}}},
+	}, "profile_ocr": ocr}
+	plan := planProfileServices(cfg, p, snapshot)
+	if len(plan.blockers) != 0 || len(plan.stop) != 1 || len(plan.start) != 1 ||
+		!sameStrings(stringsOf(obj(plan.stop[0])["nodes"]), []string{"spark01"}) ||
+		!sameStrings(stringsOf(obj(plan.start[0])["nodes"]), []string{"spark02"}) {
+		t.Fatalf("incorrect OCR move: %+v", plan)
 	}
 }

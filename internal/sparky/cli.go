@@ -185,13 +185,13 @@ Usage:
 
 Commands:
   status           Memory, running models, and queued work
-  models [NAME]    Model names and limits; --installed lists installed services
+  models [list | NAME]  List models or show one model; --installed shows services
   devices          Memory, disk, GPU, and containers on each Spark
   ocr ACTION       OCR service: install|status|start|stop
   plan ACTION NAME Preview load/unload steps without changing services
   load NAME        Load a model after active work finishes (--on NODE for one load, --force cancels conflicts)
   unload NAME      Unload a model after its active work finishes
-  profile list | plan NAME | apply NAME  List, preview, or apply profiles
+  profiles [list | plan NAME | apply NAME]  List, preview, or apply profiles
   image-profile    Shared or dedicated image memory limits
   config ACTION    show [MODEL] | validate | placement MODEL ON
   run comfyui FILE Submit a ComfyUI API workflow JSON file
@@ -283,6 +283,9 @@ func cliParse(args []string) (*cliInvocation, error) {
 	}
 
 	command := args[index]
+	if command == "profiles" {
+		command = "profile"
+	}
 	if !contains(cliCommandList, command) {
 		hint := ""
 		if closest := clientClosestMatch(command, cliCommandList); closest != "" {
@@ -358,6 +361,12 @@ func cliFinalize(inv *cliInvocation, command string) error {
 		}
 	}
 	if !inv.Help {
+		if command == "profile" && len(inv.Positional) == 0 {
+			inv.Positional = []string{"list"}
+		}
+		if command == "models" && len(inv.Positional) == 1 && inv.Positional[0] == "list" {
+			inv.Positional = nil
+		}
 		if len(inv.Positional) < sp.posMin {
 			return usagef("Missing argument: %s%s", sp.posNames[len(inv.Positional)], cliUsageSuffix)
 		}

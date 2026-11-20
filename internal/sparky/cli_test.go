@@ -574,3 +574,16 @@ func TestProjectNamesNotCommands(t *testing.T) {
 		t.Fatalf("opaque value misread: %+v", inv)
 	}
 }
+
+func TestListSubcommandDefaults(t *testing.T) {
+	for _, args := range [][]string{{"models"}, {"models", "list"}, {"models", "list", "--installed"}} {
+		if inv := mustParse(t, args); len(inv.Positional) != 0 {
+			t.Fatalf("%v should use the model list: %+v", args, inv)
+		}
+	}
+	for _, args := range [][]string{{"profiles"}, {"profiles", "list"}, {"profile"}} {
+		if inv := mustParse(t, args); inv.Command != "profile" || !reflect.DeepEqual(inv.Positional, []string{"list"}) {
+			t.Fatalf("%v should use the profile list: %+v", args, inv)
+		}
+	}
+}
