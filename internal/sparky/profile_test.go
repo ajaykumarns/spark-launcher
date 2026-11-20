@@ -513,3 +513,83 @@ func TestProfileCapabilityTables(t *testing.T) {
 		}
 	}
 }
+
+func TestProfilePlansConditionalRestartInStartupOrder(t *testing.T) {
+	large := profileModel{name: "glm", placement: "both", nodes: []string{"spark01", "spark02"}, recipe: Object{
+		"shared_device": true, "minimum_available_gib": Object{"spark01": 110, "spark02": 110},
+	}}
+	small := profileModel{name: "knowline", placement: "spark01", nodes: []string{"spark01"}, recipe: Object{
+		"shared_device": true, "minimum_available_gib": Object{"spark01": 17.5},
+	}}
+	snapshot := Object{
+		"models": Object{
+			"knowline": Object{"kind": "llm", "loaded": true, "reserved": true, "nodes": []any{"spark01"}},
+			"qwen":     Object{"kind": "llm", "loaded": true, "reserved": true, "nodes": []any{"spark01"}},
+		},
+		"nodes": Object{
+			"spark01": Object{"memory_bytes": Object{"MemAvailable": 30 * gib}},
+			"spark02": Object{"memory_bytes": Object{"MemAvailable": 115 * gib}},
+		},
+	}
+	p := clusterProfile{name: "pair", models: []profileModel{large, small}}
+	ready := func(m profileModel) bool { return m.name == "knowline" }
+	plan := planProfile(nil, p, snapshot, ready)
+	steps := arr(plan["steps"])
+	if boolean(plan["blocked"]) || len(steps) != 3 || str(obj(steps[0])["workload"]) != "qwen" {
+		t.Fatalf("expected the old model stop, new start, and conditional restart: %v", plan)
+	}
+	largeStart, smallStart := obj(steps[1]), obj(steps[2])
+	candidates := arr(largeStart["stop_if_low_memory"])
+	if len(candidates) != 1 || str(obj(candidates[0])["workload"]) != "knowline" ||
+		str(smallStart["workload"]) != "knowline" || !boolean(smallStart["only_if_stopped_for_startup"]) {
+		t.Fatalf("expected KnowLine to stop only if needed and start after GLM: %v", steps)
+	}
+	if !strings.Contains(renderProfile(plan), "May first stop knowline on spark01 if memory is low.") {
+		t.Fatal("the preview must disclose the possible stop")
+	}
+
+	cfg := Object{"policy": Object{"protected_models": []any{"knowline"}}}
+	plan = planProfile(cfg, p, snapshot, ready)
+	steps = arr(plan["steps"])
+	if len(steps) != 2 || len(arr(obj(steps[1])["stop_if_low_memory"])) != 0 {
+		t.Fatalf("a protected model must never be a restart candidate: %v", plan)
+	}
+}
+
+func TestProfileStartupRestartsOnlyWhenNeeded(t *testing.T) {
+	// Both peers are ready. The last profile entry stops first if it can
+	// free memory on a Spark that is below the new model's startup floor.
+	step := Object{
+		"minimum_available_gib": Object{"spark01": 110, "spark02": 110},
+		"stop_if_low_memory": []any{
+			profileStep("stop", "other", []string{"spark02"}),
+			profileStep("stop", "knowline", []string{"spark01"}),
+			profileStep("stop", "earlier", []string{"spark01"}),
+		},
+	}
+	for _, available := range []float64{102.7, 114} {
+		stopped := map[string]bool{}
+		snapshot := func() (Object, error) {
+			return Object{"nodes": Object{
+				"spark01": Object{"memory_bytes": Object{"MemAvailable": available * gib}},
+				"spark02": Object{"memory_bytes": Object{"MemAvailable": 115 * gib}},
+			}}, nil
+		}
+		var stops []string
+		stop := func(peer Object) error {
+			stops = append(stops, str(peer["workload"]))
+			available += 11
+			return nil
+		}
+		wantRestart := available < 110
+		if err := stopProfilePeersForStartup(step, stopped, snapshot, stop); err != nil {
+			t.Fatal(err)
+		}
+		if wantRestart && (!slices.Equal(stops, []string{"knowline"}) || !stopped["knowline"]) {
+			t.Fatalf("expected only KnowLine to stop: %v", stops)
+		}
+		if !wantRestart && len(stops) != 0 {
+			t.Fatalf("no models should stop when memory is available: %v", stops)
+		}
+	}
+}

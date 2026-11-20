@@ -45,10 +45,11 @@ Sparky confirms readiness. It stops loaded models outside the profile.
 A changed model may require a stop and a start. Sparky reads the capability
 groups and their provider lists in file order to start models. Start a model
 with a high memory floor before a model that can share the remaining memory.
-Sparky checks the
-startup floor again as each model starts. If a retained model leaves too
-little memory to start another model, the plan can block. It does not
-silently evict the retained model.
+The plan shows which later models Sparky may restart to meet an earlier
+model's startup memory floor. Apply checks memory after the planned stops.
+If memory is still low, Sparky stops only the listed models it needs to
+make room. It starts them again in profile order. Protected models stay
+running.
 
 Apply makes a fresh plan on the controller. It uses the existing lifecycle
 and request drain rules. New model requests may wait while the controller

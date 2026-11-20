@@ -63,7 +63,15 @@ func (c *Controller) PlanProfile(ctx context.Context, name string) (ProfilePlan,
 		for _, node := range objectList(step["nodes"]) {
 			nodes = append(nodes, str(node))
 		}
-		lines = append(lines, fmt.Sprintf("%s %s on %s", action, workload, strings.Join(nodes, ", ")))
+		line := fmt.Sprintf("%s %s on %s", action, workload, strings.Join(nodes, ", "))
+		if conditional, _ := step["only_if_stopped_for_startup"].(bool); conditional {
+			line += " (only if stopped to make room)"
+		}
+		lines = append(lines, line)
+		for _, raw := range objectList(step["stop_if_low_memory"]) {
+			peer := obj(raw)
+			lines = append(lines, fmt.Sprintf("  May first stop %s if memory is low.", str(peer["workload"])))
+		}
 	}
 	if len(lines) == 0 {
 		lines = append(lines, "No workloads will start, stop, or restart.")
