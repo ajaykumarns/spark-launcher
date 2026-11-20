@@ -65,7 +65,7 @@ The authoritative model file lives on Spark 1:
 
 It lists installed LLMs, Parakeet, Whisper, both ComfyUI engines, and installed ComfyUI checkpoints. Whisper stays disabled. Parakeet has `keep_loaded: true` and appears in `policy.protected_models`.
 
-Language model idle unloading is disabled. Shared ComfyUI execution requires an explicit model allowlist and a tested memory minimum. See Resource control below.
+Language model idle unloading is disabled. Shared ComfyUI execution requires a positive memory minimum. See Resource control below.
 
 Each LLM has a `run_on` value: `spark01`, `spark02`, or `both`. Its `settings` contain the supported placements. Each placement specifies its nodes, systemd units, model context, backend address, startup memory check, and numeric runtime parameters. A two-device placement runs one distributed model. It does not create two independent copies. The prepared Qwen two-device recipe needs a separate runtime load test before its performance can be claimed.
 
@@ -191,8 +191,8 @@ language model that occupies their device.
 For image checkpoints, `load` prepares the service; the workflow loads the weights.
 
 Shared image execution is opt-in. The default policy keeps GPU image jobs exclusive.
-To share with an existing language model, set `comfyui_exclusive_with_llms` to `false`,
-list approved model IDs in `comfyui_shared_llms`, and set a positive
+To share with running language models, set `comfyui_exclusive_with_llms` to `false`
+and set a positive
 `comfyui_min_available_gib`. The controller checks host `MemAvailable` on the image
 node. If memory is low, it releases only idle ComfyUI caches, checks again, and waits
 if necessary. It never unloads an LLM to admit a shared image job. LLM startup and
@@ -483,8 +483,10 @@ report and exit `1`.
 
 A native status icon opens a standard macOS menu: Sparky and the current state, the
 real loaded model and placement, in-use / total memory per Spark, active
-requests, and the last update time. The Switch profile submenu lists profiles
-by capability and shows the plan before it applies a change.
+requests, and the last update time. The selected profile name and optional
+description appear at the top of the menu.
+The Switch Profile submenu lists profile names and descriptions. It marks the
+selected profile and shows the plan before it applies a change.
 Settings holds start-at-login, show-title, and diagnostics. Quit is a main menu item.
 
 ![Sparky native macOS menu showing the active model, per-device memory, and Settings submenu](docs/images/sparky-menu.png)

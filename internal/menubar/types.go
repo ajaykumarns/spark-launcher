@@ -25,8 +25,9 @@ type DeviceStatus struct {
 // Choice is one loadable catalog entry. ID is the canonical catalog model ID,
 // which is also the exact argument passed to `sparky load`.
 type Choice struct {
-	ID   string
-	Name string
+	ID          string
+	Name        string
+	Description string
 }
 
 // Snapshot is a deep, immutable view of the last known controller state.
@@ -35,13 +36,14 @@ type Choice struct {
 // accepted until its result has been recorded. LoadError/LoadMessage carry
 // the last load outcome.
 type Snapshot struct {
-	ProfileName  string
-	Capabilities []ProfileCapability
-	Models       []ModelStatus
-	Devices      []DeviceStatus
-	UpdatedAt    time.Time
-	Error        string
-	Loading      bool
-	LoadError    string
-	LoadMessage  string
+	ProfileName        string
+	ProfileDescription string
+	Capabilities       []ProfileCapability
+	Models             []ModelStatus
+	Devices            []DeviceStatus
+	UpdatedAt          time.Time
+	Error              string
+	Loading            bool
+	LoadError          string
+	LoadMessage        string
 }

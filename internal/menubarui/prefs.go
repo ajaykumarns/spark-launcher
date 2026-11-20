@@ -16,7 +16,7 @@ type Prefs struct {
 }
 
 // DefaultPrefs returns the safe defaults.
-func DefaultPrefs() Prefs { return Prefs{} }
+func DefaultPrefs() Prefs { return Prefs{ShowTitle: true} }
 
 func prefsPath() string {
 	if p := os.Getenv("SPARKY_MENUBAR_PREFS"); p != "" {
@@ -32,7 +32,7 @@ func LoadPrefs() Prefs {
 	if err != nil {
 		return DefaultPrefs()
 	}
-	var p Prefs
+	p := DefaultPrefs()
 	if json.Unmarshal(raw, &p) != nil {
 		return DefaultPrefs()
 	}

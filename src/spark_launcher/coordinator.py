@@ -46,8 +46,8 @@ class Coordinator:
         if a.get('exclusive') or b.get('exclusive'):return True
         if a['name']==b['name']:return a['name'].startswith('comfyui@')
         if self.shared_comfy():
-            allowed=self.config['policy']['comfyui_shared_llms']
-            if any(image['name'].startswith('comfyui@') and llm['name'] in allowed
+            models=self.config['models']
+            if any(image['name'].startswith('comfyui@') and models.get(llm['name'],{}).get('kind')=='llm'
                    for image,llm in ((a,b),(b,a))):return False
         return True
 
@@ -448,17 +448,16 @@ class Coordinator:
                     conflicts=[n for n,s in snapshot['models'].items() if s['kind']=='llm' and s['loaded'] and node in s['nodes']]
                     if shared:
                         policy=self.config['policy']
-                        unsupported=[n for n in conflicts if n not in policy['comfyui_shared_llms']]
                         available=snapshot['nodes'][node]['memory_bytes']['MemAvailable']
                         minimum=policy['comfyui_min_available_gib']*1024**3
-                        if not unsupported and available<minimum:
+                        if available<minimum:
                             # Release only this engine's idle cache. Never stop
                             # an LLM to make room for a shared image job.
                             self.runtime.clear_comfy(node)
                             available=self.runtime.inspect_node(node)['memory_bytes']['MemAvailable']
-                        if unsupported or available<minimum:
+                        if available<minimum:
                             self.release(token)
-                            return {'status':'waiting','retry_after':2,'reason':'unapproved_loaded_llm' if unsupported else 'low_available_memory',
+                            return {'status':'waiting','retry_after':2,'reason':'low_available_memory',
                                     'available_bytes':available,'minimum_bytes':minimum}
                         self.runtime.event('comfy_shared_admitted',node=node,prompt_id=str(prompt_id),
                                            llms=conflicts,available_bytes=available,minimum_bytes=minimum)

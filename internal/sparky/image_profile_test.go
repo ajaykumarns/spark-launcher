@@ -38,7 +38,7 @@ func profileConfig(t *testing.T, root string) Object {
 			"comfy_url": "http://worker:8188"},
 	}
 	cfg["policy"] = Object{"interrupt_active_jobs": false, "comfyui_exclusive_with_llms": false,
-		"comfyui_min_available_gib": 21.5, "comfyui_shared_llms": []any{"qwen3.8-flash-next"}}
+		"comfyui_min_available_gib": 21.5}
 	cfg["models"] = Object{
 		"qwen3.8-flash-next": llmModel("spark01"),
 		"comfyui": Object{"kind": "comfyui", "name": "ComfyUI", "run_on": "spark02",

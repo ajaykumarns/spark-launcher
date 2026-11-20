@@ -141,8 +141,9 @@ func TestResolveCLIIgnoresNonExecutable(t *testing.T) {
 
 func TestPrefsDefaultsOptOut(t *testing.T) {
 	t.Setenv("SPARKY_MENUBAR_PREFS", filepath.Join(t.TempDir(), "prefs.json"))
-	if LoadPrefs().StartAtLogin {
-		t.Fatal("start at login must default off")
+	prefs := LoadPrefs()
+	if prefs.StartAtLogin || !prefs.ShowTitle {
+		t.Fatalf("expected start at login off and title on, got %+v", prefs)
 	}
 }
 

@@ -78,14 +78,14 @@ static NSString *Str(const char *s) { return s ? [NSString stringWithUTF8String:
 @property (nonatomic, strong) NSMenuItem *titleItem;
 @property (nonatomic, strong) NSMenuItem *resultItem;
 @property (nonatomic, strong) NSMenuItem *catalogItem;
-@property (nonatomic, strong) SparkyInfoRow *header;
+@property (nonatomic, strong) NSMenuItem *locationItem;
+@property (nonatomic, strong) NSMenuItem *modelItem;
 @property (nonatomic, strong) SparkyInfoRow *model;
 @property (nonatomic, strong) SparkyInfoRow *location;
 @property (nonatomic, strong) SparkyInfoRow *memoryCaption;
 @property (nonatomic, strong) SparkyInfoRow *requests;
 @property (nonatomic, strong) SparkyInfoRow *footer;
 @property (nonatomic, strong) SparkyInfoRow *result;
-@property (nonatomic, strong) SparkyInfoRow *catalogState;
 @property (nonatomic, strong) NSArray<SparkyInfoRow *> *extraRows;
 @property (nonatomic, strong) NSArray<SparkyInfoRow *> *memoryRows;
 @property (nonatomic, strong) NSArray<NSString *> *extras;
@@ -93,15 +93,20 @@ static NSString *Str(const char *s) { return s ? [NSString stringWithUTF8String:
 @property (nonatomic, strong) NSArray<NSString *> *memoryValues;
 @property (nonatomic, strong) NSArray<NSString *> *choiceLabels;
 @property (nonatomic, strong) NSArray<NSString *> *choiceIDs;
+@property (nonatomic, strong) NSArray<NSString *> *choiceDescriptions;
 @property (nonatomic, strong) NSString *pickerCaption;
+@property (nonatomic, strong) NSString *selectedProfile;
 @property (nonatomic) BOOL tracking;
 @property (nonatomic) BOOL modelTracking;
 @property (nonatomic) BOOL mainDirty;
 @property (nonatomic) BOOL modelsDirty;
 @property (nonatomic) BOOL loadEnabled;
 @property (nonatomic) BOOL hasCLI;
+@property (nonatomic, strong) NSTimer *profileSpinnerTimer;
+@property (nonatomic) NSUInteger profileSpinnerFrame;
 - (void)buildMain;
 - (void)buildModels;
+- (void)setProfilesLoading:(BOOL)loading;
 - (void)performBlock:(dispatch_block_t)block;
 @end
 
@@ -118,7 +123,53 @@ static NSMenuItem *Action(NSString *title, SEL selector, id target, NSString *ke
     item.target = target;
     return item;
 }
-static NSMenuItem *Info(SparkyInfoRow *row) {
+// AppKit centers the state image on the whole item, including its subtitle.
+static NSImage *ProfileCheckmark(void) {
+    static NSImage *checkmark;
+    if (!checkmark) {
+        checkmark = [NSImage imageWithSize:NSMakeSize(16, 24) flipped:NO drawingHandler:^BOOL(NSRect rect) {
+            NSBezierPath *stroke = [NSBezierPath bezierPath];
+            [stroke moveToPoint:NSMakePoint(1.5, 16.5)];
+            [stroke lineToPoint:NSMakePoint(4.5, 13.5)];
+            [stroke lineToPoint:NSMakePoint(10.0, 21.0)];
+            stroke.lineWidth = 1.65;
+            stroke.lineCapStyle = NSLineCapStyleRound;
+            stroke.lineJoinStyle = NSLineJoinStyleRound;
+            [NSColor.blackColor setStroke];
+            [stroke stroke];
+            return YES;
+        }];
+        checkmark.template = YES;
+    }
+    return checkmark;
+}
+static NSArray<NSImage *> *ProfileSpinnerFrames(void) {
+    static NSArray<NSImage *> *frames;
+    if (!frames) {
+        NSMutableArray<NSImage *> *images = [NSMutableArray array];
+        for (NSUInteger frame = 0; frame < 8; frame++) {
+            NSImage *image = [NSImage imageWithSize:NSMakeSize(15, 15) flipped:NO drawingHandler:^BOOL(NSRect rect) {
+                for (NSUInteger spoke = 0; spoke < 8; spoke++) {
+                    CGFloat angle = spoke * M_PI / 4.0;
+                    NSInteger age = (frame + 8 - spoke) % 8;
+                    [[NSColor.blackColor colorWithAlphaComponent:1.0 - 0.11 * age] setStroke];
+                    NSBezierPath *line = [NSBezierPath bezierPath];
+                    line.lineWidth = 1.35;
+                    line.lineCapStyle = NSLineCapStyleRound;
+                    [line moveToPoint:NSMakePoint(7.5 + 3.3 * cos(angle), 7.5 - 3.3 * sin(angle))];
+                    [line lineToPoint:NSMakePoint(7.5 + 6.0 * cos(angle), 7.5 - 6.0 * sin(angle))];
+                    [line stroke];
+                }
+                return YES;
+            }];
+            image.template = YES;
+            [images addObject:image];
+        }
+        frames = [images copy];
+    }
+    return frames;
+}
+static NSMenuItem *Info(NSView *row) {
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
     item.view = row;
     return item;
@@ -129,23 +180,22 @@ static NSMenuItem *Info(SparkyInfoRow *row) {
     if ((self = [super init])) {
         self.menu = NewMenu(@"Sparky");
         self.menu.minimumWidth = 300;
-        self.models = NewMenu(@"Switch profile");
+        self.models = NewMenu(@"Switch Profile");
         self.settings = NewMenu(@"Settings");
         self.menu.delegate = self;
         self.models.delegate = self;
         self.extras = @[]; self.memoryLabels = @[]; self.memoryValues = @[];
-        self.choiceLabels = @[]; self.choiceIDs = @[]; self.pickerCaption = @"Loading profiles…";
-        self.header = [[SparkyInfoRow alloc] initSmall:NO strong:YES pair:NO];
+        self.choiceLabels = @[]; self.choiceIDs = @[]; self.choiceDescriptions = @[];
+        self.pickerCaption = @"Loading profiles…";
         self.model = [[SparkyInfoRow alloc] initSmall:NO strong:YES pair:NO];
         self.location = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
         self.memoryCaption = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
         self.requests = [[SparkyInfoRow alloc] initSmall:NO strong:NO pair:YES];
         self.footer = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
         self.result = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
-        self.catalogState = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
-        [self.header setLeft:@"Sparky" right:@"Unknown"];
         [self.model setLeft:@"Waiting for status" right:@""];
-        self.loadItem = Action(@"Switch profile…", NULL, nil, @"");
+        self.modelItem = Action(@"Waiting for status", NULL, nil, @"");
+        self.loadItem = Action(@"Switch Profile", NULL, nil, @"");
         self.loadItem.submenu = self.models;
         self.refreshItem = Action(@"Refresh status", @selector(refresh:), self, @"");
         self.quitItem = Action(@"Quit Sparky", @selector(quit:), self, @"q");
@@ -162,9 +212,14 @@ static NSMenuItem *Info(SparkyInfoRow *row) {
 }
 - (void)buildMain {
     [self.menu removeAllItems];
-    [self.menu addItem:Info(self.header)];
-    [self.menu addItem:Info(self.model)];
-    [self.menu addItem:Info(self.location)];
+    if (@available(macOS 14.4, *)) {
+        [self.menu addItem:self.modelItem];
+    } else {
+        [self.menu addItem:Info(self.model)];
+        self.locationItem = Info(self.location);
+        self.locationItem.hidden = !self.location.left.stringValue.length;
+        [self.menu addItem:self.locationItem];
+    }
     NSMutableArray *extraRows = [NSMutableArray array];
     for (NSString *line in self.extras) {
         SparkyInfoRow *row = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
@@ -198,18 +253,48 @@ static NSMenuItem *Info(SparkyInfoRow *row) {
 - (void)buildModels {
     [self.models removeAllItems];
     NSString *caption = self.pickerCaption;
-    [self.catalogState setLeft:caption right:@""];
-    self.catalogItem = Info(self.catalogState);
+    self.catalogItem = Action(caption, NULL, nil, @"");
+    self.catalogItem.enabled = NO;
     self.catalogItem.hidden = self.choiceIDs.count && [self.pickerCaption isEqualToString:@"Select a profile"];
     [self.models addItem:self.catalogItem];
     for (NSUInteger i = 0; i < self.choiceIDs.count; i++) {
         NSMenuItem *item = Action(self.choiceLabels[i], @selector(choose:), self, @"");
         item.representedObject = self.choiceIDs[i];
-        item.toolTip = self.choiceIDs[i];
+        NSString *description = self.choiceDescriptions[i];
+        if (@available(macOS 14.4, *)) {
+            if (description.length) {
+                item.subtitle = description;
+                item.onStateImage = ProfileCheckmark();
+            }
+        }
+        item.toolTip = description.length ? description : self.choiceLabels[i];
+        item.state = [self.choiceIDs[i] isEqualToString:self.selectedProfile] ? NSControlStateValueOn : NSControlStateValueOff;
         item.enabled = self.loadEnabled && self.hasCLI;
         [self.models addItem:item];
     }
     self.modelsDirty = NO;
+}
+- (void)setProfilesLoading:(BOOL)loading {
+    if (!loading) {
+        if (self.profileSpinnerTimer) {
+            [self.profileSpinnerTimer invalidate];
+            self.profileSpinnerTimer = nil;
+            self.loadItem.image = nil;
+        }
+        return;
+    }
+    if (self.profileSpinnerTimer) return;
+    NSArray<NSImage *> *frames = ProfileSpinnerFrames();
+    self.profileSpinnerFrame = 0;
+    self.loadItem.image = frames[0];
+    __weak SparkyMenuController *weakSelf = self;
+    self.profileSpinnerTimer = [NSTimer timerWithTimeInterval:0.10 repeats:YES block:^(NSTimer *timer) {
+        SparkyMenuController *controller = weakSelf;
+        controller.profileSpinnerFrame = (controller.profileSpinnerFrame + 1) % frames.count;
+        controller.loadItem.image = frames[controller.profileSpinnerFrame];
+    }];
+    [NSRunLoop.mainRunLoop addTimer:self.profileSpinnerTimer forMode:NSRunLoopCommonModes];
+    [NSRunLoop.mainRunLoop addTimer:self.profileSpinnerTimer forMode:NSEventTrackingRunLoopMode];
 }
 - (void)menuNeedsUpdate:(NSMenu *)menu {
     if (menu == self.menu && self.mainDirty) [self buildMain];
@@ -299,8 +384,16 @@ void sparky_set_panel(const char *headerTitle, const char *headerState,
     NSString *mc=Str(memoryCaption), *rl=Str(refreshLabel), *ll=Str(loadLabel), *ft=Str(footer), *lr=Str(loadResult);
     OnMain(^{
         SparkyMenuController *c = Controller();
-        [c.header setLeft:ht right:hs]; [c.model setLeft:mn right:@""];
-        [c.location setLeft:ml right:@""]; [c.memoryCaption setLeft:mc right:@""];
+        gItem.button.toolTip = [NSString stringWithFormat:@"%@ · %@", ht, hs];
+        if (@available(macOS 14.4, *)) {
+            c.modelItem.title = mn;
+            c.modelItem.subtitle = ml.length ? ml : nil;
+        } else {
+            [c.model setLeft:mn right:@""];
+            [c.location setLeft:ml right:@""];
+            c.locationItem.hidden = !ml.length;
+        }
+        [c.memoryCaption setLeft:mc right:@""];
         [c.footer setLeft:ft right:@""]; [c.result setLeft:lr right:@""];
         c.resultItem.hidden = !lr.length;
         c.loadItem.title = ll; c.refreshItem.title = rl;
@@ -331,17 +424,32 @@ void sparky_set_requests(const char *label, const char *value) {
     NSString *l=Str(label), *v=Str(value);
     OnMain(^{ [Controller().requests setLeft:l right:v]; });
 }
-void sparky_set_picker(int picking, const char *caption, const char **labels, const char **ids, int count) {
-    NSString *cap=Str(caption);
-    NSMutableArray *l=[NSMutableArray array], *v=[NSMutableArray array];
-    for (int i=0; i<count && labels && ids; i++) { [l addObject:Str(labels[i])]; [v addObject:Str(ids[i])]; }
+void sparky_set_picker(int loading, const char *caption, const char **labels, const char **ids,
+                       const char **descriptions, int count, const char *selected) {
+    NSString *cap=Str(caption), *current=Str(selected);
+    NSMutableArray *l=[NSMutableArray array], *v=[NSMutableArray array], *d=[NSMutableArray array];
+    for (int i=0; i<count && labels && ids; i++) {
+        [l addObject:Str(labels[i])];
+        [v addObject:Str(ids[i])];
+        [d addObject:descriptions ? Str(descriptions[i]) : @""];
+    }
     OnMain(^{
         SparkyMenuController *c = Controller();
-        BOOL changed = ![c.choiceLabels isEqualToArray:l] || ![c.choiceIDs isEqualToArray:v];
-        c.pickerCaption=cap; c.choiceLabels=l; c.choiceIDs=v;
-        [c.catalogState setLeft:cap right:@""];
+        BOOL changed = ![c.choiceLabels isEqualToArray:l] || ![c.choiceIDs isEqualToArray:v]
+            || ![c.choiceDescriptions isEqualToArray:d];
+        BOOL selectionChanged = ![current isEqualToString:c.selectedProfile];
+        c.pickerCaption=cap; c.choiceLabels=l; c.choiceIDs=v; c.choiceDescriptions=d; c.selectedProfile=current;
+        [c setProfilesLoading:loading != 0];
+        c.catalogItem.title = cap;
         c.catalogItem.hidden = v.count && [cap isEqualToString:@"Select a profile"];
         if (changed) { c.modelsDirty=YES; if (!c.modelTracking) [c buildModels]; }
+        if (selectionChanged) {
+            for (NSMenuItem *item in c.models.itemArray) {
+                if (item.action == @selector(choose:)) {
+                    item.state = [item.representedObject isEqualToString:current] ? NSControlStateValueOn : NSControlStateValueOff;
+                }
+            }
+        }
     });
 }
 void sparky_set_enabled(int loadEnabled, int refreshEnabled, int hasCLI) {
@@ -373,6 +481,33 @@ int sparky_probe_choice_count(void) {
     for (NSMenuItem *item in Controller().models.itemArray) if (item.action == @selector(choose:)) count++;
     return count;
 }
+char *sparky_probe_selected_profile(void) {
+    for (NSMenuItem *item in Controller().models.itemArray) {
+        if (item.action == @selector(choose:) && item.state == NSControlStateValueOn)
+            return strdup([item.representedObject UTF8String]);
+    }
+    return NULL;
+}
+char *sparky_probe_subtitle(void) {
+    SparkyMenuController *c = Controller();
+    if (@available(macOS 14.4, *))
+        return c.modelItem.subtitle ? strdup(c.modelItem.subtitle.UTF8String) : NULL;
+    if (c.locationItem.hidden) return NULL;
+    return strdup(c.location.left.stringValue.UTF8String);
+}
+char *sparky_probe_choice_subtitle(const char *id) {
+    for (NSMenuItem *item in Controller().models.itemArray) {
+        if (item.action != @selector(choose:) || ![item.representedObject isEqualToString:Str(id)]) continue;
+        if (@available(macOS 14.4, *))
+            return item.subtitle ? strdup(item.subtitle.UTF8String) : NULL;
+        return item.toolTip ? strdup(item.toolTip.UTF8String) : NULL;
+    }
+    return NULL;
+}
+int sparky_probe_profile_spinner(void) {
+    SparkyMenuController *c = Controller();
+    return c.profileSpinnerTimer != nil && c.loadItem.image != nil;
+}
 char *sparky_probe_picker_caption(void) { return strdup(Controller().pickerCaption.UTF8String); }
 char *sparky_probe_layout(int picking) {
     if (!NSThread.isMainThread) return strdup("native menu test requires main thread");
@@ -381,7 +516,13 @@ char *sparky_probe_layout(int picking) {
         return strdup("actions must use native menu items and a native model submenu");
     if (c.menu.autoenablesItems || c.models.autoenablesItems)
         return strdup("native validation must preserve Go enablement");
-    for (SparkyInfoRow *row in @[c.header,c.model,c.location,c.memoryCaption,c.requests,c.footer]) {
+    if (@available(macOS 14.4, *)) {
+        if (c.menu.itemArray.firstObject != c.modelItem)
+            return strdup("the profile or model must be the first row");
+    } else if (c.menu.itemArray.firstObject.view != c.model) {
+        return strdup("the profile or model must be the first row");
+    }
+    for (SparkyInfoRow *row in @[c.model,c.location,c.memoryCaption,c.requests,c.footer]) {
         [row layoutSubtreeIfNeeded];
         if (NSHeight(row.frame)>22 || NSWidth(row.frame)<300 || row.left.maximumNumberOfLines>1)
             return strdup("information rows must use compact single-line menu geometry");

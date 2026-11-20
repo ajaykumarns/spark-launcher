@@ -34,8 +34,9 @@ void sparky_set_requests(const char *label, const char *value);
 
 // Model submenu content. Native items are rebuilt only when labels/IDs change,
 // and structural changes wait until submenu tracking finishes.
-void sparky_set_picker(int picking, const char *pickerCaption,
-                       const char **labels, const char **ids, int count);
+void sparky_set_picker(int loading, const char *pickerCaption,
+                       const char **labels, const char **ids, const char **descriptions,
+                       int count, const char *selected);
 
 // Interactive enablement and settings state.
 void sparky_set_enabled(int loadEnabled, int refreshEnabled, int hasCLI);
@@ -55,6 +56,10 @@ void sparky_set_icon_state(int state, const char *title);
 int sparky_probe_build_panel(void);
 int sparky_probe_choice_count(void);
 char *sparky_probe_picker_caption(void);
+int sparky_probe_profile_spinner(void);
+char *sparky_probe_selected_profile(void);
+char *sparky_probe_subtitle(void);
+char *sparky_probe_choice_subtitle(const char *id);
 char *sparky_probe_layout(int picking);
 
 int sparky_confirm_profile(const char *name, const char *plan);

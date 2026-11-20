@@ -148,8 +148,8 @@ func (e *integrationEnv) writeCentral() {
 		},
 		"policy": Object{
 			"interrupt_active_jobs": false, "protected_models": []any{integrationParakeet},
-			"comfyui_exclusive_with_llms": true, "comfyui_shared_llms": []any{},
-			"comfyui_min_available_gib": 18,
+			"comfyui_exclusive_with_llms": true,
+			"comfyui_min_available_gib":   18,
 		},
 		"models": Object{
 			integrationModel: Object{

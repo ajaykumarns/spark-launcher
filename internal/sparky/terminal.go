@@ -1094,6 +1094,67 @@ func fallbackWorkloads(data Object, node string) []Object {
 	return rows
 }
 
+func profileLabel(s string) string {
+	if s == "ocr" {
+		return "OCR"
+	}
+	if s == "" {
+		return "Unknown"
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+func formatProfileList(data Object, width int, color bool) string {
+	rows := []styledRow{}
+	for _, raw := range arr(data["profiles"]) {
+		row := obj(raw)
+		name := str(row["name"])
+		if name == str(data["selected"]) {
+			name += " (selected)"
+		}
+		var groups []string
+		for _, rawGroup := range arr(row["capabilities"]) {
+			groups = append(groups, profileLabel(str(obj(rawGroup)["name"])))
+		}
+		capabilities := strings.Join(groups, ", ")
+		if capabilities == "" {
+			capabilities = "None"
+		}
+		if problem := str(row["error"]); problem != "" {
+			capabilities = "Invalid profile · " + problem
+		}
+		description := strings.Join(strings.Fields(str(row["description"])), " ")
+		rows = append(rows, styledRow{name, description, capabilities})
+	}
+	if len(rows) == 0 {
+		return "No profiles defined."
+	}
+	return table([]string{"PROFILE", "DESCRIPTION", "CAPABILITIES"}, rows, "Cluster profiles", width, color)
+}
+
+func formatProfileCapabilities(groups []any, width int, color bool) string {
+	rows := []styledRow{}
+	for _, raw := range groups {
+		group := obj(raw)
+		name := profileLabel(str(group["name"]))
+		state := str(group["state"])
+		providers := arr(group["providers"])
+		if len(providers) == 0 {
+			rows = append(rows, styledRow{name, profileLabel(state), "–", "–"})
+		}
+		for _, item := range providers {
+			provider := obj(item)
+			workload := str(provider["workload"])
+			if state == "partial" && !boolean(provider["ready"]) {
+				workload += " (unavailable)"
+			}
+			rows = append(rows, styledRow{name, profileLabel(state), workload,
+				strings.Join(stringsOf(provider["nodes"]), " + ")})
+		}
+	}
+	return table([]string{"CAPABILITY", "AVAILABILITY", "PROVIDER", "PLACEMENT"}, rows, "Live capabilities", width, color)
+}
+
 func formatStatus(data Object, width int, color bool) string {
 	deviceRows := []styledRow{}
 	nodes := obj(data["nodes"])
@@ -1115,7 +1176,7 @@ func formatStatus(data Object, width int, color bool) string {
 			lines = append(lines, note(description, "dim", color, width))
 		}
 		if groups := arr(profile["capabilities"]); len(groups) > 0 {
-			lines = append(lines, "Capabilities now", strings.TrimRight(profileCapabilitySummary(groups), "\n"), "")
+			lines = append(lines, "", formatProfileCapabilities(groups, width, color), "")
 		}
 	} else if str(profile["error"]) != "" {
 		lines = append(lines, note(str(profile["error"]), "bright_yellow", color, width))
@@ -1257,6 +1318,8 @@ func terminalRender(kind string, data any, options terminalOptions) string {
 		return formatLogs(objOrEmpty(data), width, color)
 	case "doctor":
 		return formatDoctor(objOrEmpty(data), width, color)
+	case "profile-list":
+		return formatProfileList(objOrEmpty(data), width, color)
 	case "status":
 		return formatStatus(objOrEmpty(data), width, color)
 	case "ocr":

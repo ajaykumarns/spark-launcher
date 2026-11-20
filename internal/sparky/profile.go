@@ -113,8 +113,8 @@ func (file profileFile) profile(name string, cfg Object) (clusterProfile, error)
 			var nodes []string
 			canonical := id
 			if id == "spark-ocr" {
-				if on != "spark01" {
-					return p, fail("Spark OCR is available only on spark01.")
+				if len(placements[on]) != 1 {
+					return p, fail("Give Spark OCR an explicit single Spark.")
 				}
 				nodes = []string{on}
 			} else {
@@ -176,38 +176,6 @@ func listProfiles(root string) (Object, error) {
 		profiles = append(profiles, row)
 	}
 	return Object{"profiles": profiles, "selected": str(selectedProfile(cfg)["name"])}, nil
-}
-
-func renderProfileList(data Object) string {
-	var out strings.Builder
-	for _, raw := range arr(data["profiles"]) {
-		row := obj(raw)
-		name := str(row["name"])
-		if name == str(data["selected"]) {
-			name += " (last applied)"
-		}
-		if problem := str(row["error"]); problem != "" {
-			fmt.Fprintf(&out, "%s — %s\n", name, problem)
-			continue
-		}
-		var groups []string
-		for _, group := range arr(row["capabilities"]) {
-			groups = append(groups, str(obj(group)["name"]))
-		}
-		if len(groups) == 0 {
-			groups = []string{"no capabilities"}
-		}
-		groupList := strings.Join(groups, ", ")
-		if description := strings.Join(strings.Fields(str(row["description"])), " "); description != "" {
-			fmt.Fprintf(&out, "%s — %s (%s)\n", name, description, groupList)
-		} else {
-			fmt.Fprintf(&out, "%s — %s\n", name, groupList)
-		}
-	}
-	if out.Len() == 0 {
-		return "No profiles defined.\n"
-	}
-	return out.String()
 }
 
 func profileCapability(name string, model Object) string {
@@ -339,25 +307,53 @@ func planProfile(cfg Object, p clusterProfile, snapshot Object, ready func(profi
 	}
 
 	started := []string{}
-	for _, target := range p.models {
-		if !start[target.name] {
+	restartable := map[string]bool{}
+	for i, target := range p.models {
+		if !start[target.name] && !restartable[target.name] {
 			continue
 		}
 		step := profileStep("start", target.name, target.nodes)
 		step["on"] = target.placement
-		step["minimum_available_gib"] = obj(target.recipe["minimum_available_gib"])
-		steps = append(steps, step)
-		for _, node := range keys(obj(target.recipe["minimum_available_gib"])) {
-			floor := num(obj(target.recipe["minimum_available_gib"])[node])
-			memory := obj(obj(obj(snapshot["nodes"])[node])["memory_bytes"])
-			available := num(memory["MemAvailable"]) / (1 << 30)
-			if floor > 0 && available < floor && !contains(released, node) {
+		floors := obj(target.recipe["minimum_available_gib"])
+		step["minimum_available_gib"] = floors
+		if restartable[target.name] {
+			step["only_if_stopped_for_startup"] = true
+		}
+		var candidates []any
+		candidateNodes := []string{}
+		for j := len(p.models) - 1; j > i; j-- {
+			peer := p.models[j]
+			row := obj(running[peer.name])
+			if start[peer.name] || !boolean(row["reserved"]) || effectiveProtected(row, obj(cfg["policy"]), peer.name) {
+				continue
+			}
+			var constrainedNodes []string
+			for _, node := range peer.nodes {
+				if num(floors[node]) > 0 {
+					constrainedNodes = append(constrainedNodes, node)
+				}
+			}
+			if len(constrainedNodes) > 0 {
+				candidates = append(candidates, profileStep("stop", peer.name, peer.nodes))
+				candidateNodes = unionNodes(candidateNodes, constrainedNodes)
+				restartable[peer.name] = true
+			}
+		}
+		if len(candidates) > 0 {
+			step["stop_if_low_memory"] = candidates
+		}
+		for _, node := range keys(floors) {
+			floor := num(floors[node])
+			available := profileAvailableGiB(snapshot, node)
+			if floor > 0 && available < floor && !restartable[target.name] &&
+				!contains(released, node) && !contains(candidateNodes, node) {
 				blockers = append(blockers, fmt.Sprintf("%s needs %.1f GiB available on %s to start. It currently has %.1f GiB and no stop is planned there.", target.name, floor, node, available))
 			}
-			if (contains(released, node) || contains(started, node)) && floor > 0 {
+			if floor > 0 && (contains(released, node) || contains(started, node)) {
 				step["recheck_memory_at_start"] = true
 			}
 		}
+		steps = append(steps, step)
 		started = unionNodes(started, target.nodes)
 	}
 
@@ -385,6 +381,52 @@ func planProfile(cfg Object, p clusterProfile, snapshot Object, ready func(profi
 		result["description"] = p.description
 	}
 	return result
+}
+
+func profileAvailableGiB(snapshot Object, node string) float64 {
+	memory := obj(obj(obj(snapshot["nodes"])[node])["memory_bytes"])
+	return num(memory["MemAvailable"]) / (1 << 30)
+}
+
+// Use fresh memory measurements after planned stops. Stop the lowest-priority
+// ready peers first and leave the remaining peers running once the start fits.
+func stopProfilePeersForStartup(step Object, stopped map[string]bool, snapshot func() (Object, error), stop func(Object) error) error {
+	floors := obj(step["minimum_available_gib"])
+	var state Object
+	for _, raw := range arr(step["stop_if_low_memory"]) {
+		peer := obj(raw)
+		name := str(peer["workload"])
+		if stopped[name] {
+			continue
+		}
+		if state == nil {
+			var err error
+			state, err = snapshot()
+			if err != nil {
+				return err
+			}
+		}
+		for _, node := range stringsOf(peer["nodes"]) {
+			floor := num(floors[node])
+			if floor <= 0 {
+				continue
+			}
+			available := profileAvailableGiB(state, node)
+			if available <= 0 {
+				return fail("Could not confirm available memory on %s before stopping %s.", node, name)
+			}
+			if available >= floor {
+				continue
+			}
+			if err := stop(peer); err != nil {
+				return err
+			}
+			stopped[name] = true
+			state = nil
+			break
+		}
+	}
+	return nil
 }
 
 func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Object, error) {
@@ -420,21 +462,12 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 		if err != nil {
 			return nil, err
 		}
-		if profileServicePlacement(p.capabilities, "spark-ocr") == "spark01" {
-			if profileOCRRunning(snapshot) {
-				checkProfileOCR(snapshot)
-			} else {
-				ocr, err := newOCRService(rt.root())
-				if err != nil {
-					return nil, err
-				}
-				source, err := ocr.ocrSource()
-				if err != nil {
-					return nil, err
-				}
-				snapshot["ocr_installed"] = ocrFileExists(filepath.Join(source, "deploy", "compose.yaml")) &&
-					ocrFileExists(ocr.ocrEnvFile(source))
+		if node := profileServicePlacement(p.capabilities, "spark-ocr"); node != "" {
+			status, err := rt.profileOCR(ctx, node, "status")
+			if err != nil {
+				return nil, err
 			}
+			snapshot["profile_ocr"] = status
 		}
 		return planProfile(cfg, p, snapshot, func(m profileModel) bool {
 			return rt.nativeReady(ctx, m.name, m.model, m.recipe, m.nodes, m.placement)
@@ -482,12 +515,16 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 		}
 		return nil
 	}
+	stoppedForStartup := map[string]bool{}
 	for _, v := range arr(result["steps"]) {
+		step := obj(v)
+		model := str(step["workload"])
+		if boolean(step["only_if_stopped_for_startup"]) && !stoppedForStartup[model] {
+			continue
+		}
 		if err := checkConfig(); err != nil {
 			return failed(err)
 		}
-		step := obj(v)
-		model := str(step["workload"])
 		if kind := str(step["service_kind"]); kind != "" {
 			err = c.applyProfileService(ctx, rt, kind, step)
 		} else {
@@ -495,7 +532,22 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 			if str(step["action"]) == "stop" {
 				_, err = c.unloadLocked(ctx, cfg, model)
 			} else {
-				_, err = c.loadLocked(ctx, cfg, model, "", str(step["on"]), c.generationCopy(), true)
+				err = stopProfilePeersForStartup(step, stoppedForStartup, func() (Object, error) {
+					return rt.snapshot(ctx, true)
+				}, func(peer Object) error {
+					if err := checkConfig(); err != nil {
+						return err
+					}
+					name := str(peer["workload"])
+					if _, err := c.unloadLocked(ctx, cfg, name); err != nil {
+						return err
+					}
+					completed = append(completed, profileStep("stop", name, stringsOf(peer["nodes"])))
+					return nil
+				})
+				if err == nil {
+					_, err = c.loadLocked(ctx, cfg, model, "", str(step["on"]), c.generationCopy(), true)
+				}
 			}
 		}
 		if err != nil {
@@ -550,8 +602,10 @@ func selectedProfile(cfg Object) Object {
 
 func (c *Coordinator) runningProfileCapabilities(ctx context.Context, groups []any, snapshot Object) []any {
 	cfg := c.cfg()
-	if profileServicePlacement(groups, "spark-ocr") == "spark01" {
-		checkProfileOCR(snapshot)
+	if node := profileServicePlacement(groups, "spark-ocr"); node != "" && profileOCRRunning(snapshot, node) {
+		if status, err := c.runtime.profileOCR(ctx, node, "status"); err == nil {
+			snapshot["profile_ocr"] = status
+		}
 	}
 	kept := planProfileServices(cfg, groups, snapshot).keep
 	return profileAvailability(groups, func(provider Object) bool {
@@ -607,10 +661,17 @@ func renderProfile(result Object) string {
 		for _, v := range arr(result[key]) {
 			row := obj(v)
 			fmt.Fprintf(&out, "  %s %s on %s", str(row["action"]), str(row["workload"]), strings.Join(stringsOf(row["nodes"]), ", "))
+			if boolean(row["only_if_stopped_for_startup"]) {
+				out.WriteString(" (only if stopped to make room)")
+			}
 			if boolean(row["recheck_memory_at_start"]) {
 				out.WriteString(" (check available memory at startup)")
 			}
 			out.WriteByte('\n')
+			for _, raw := range arr(row["stop_if_low_memory"]) {
+				peer := obj(raw)
+				fmt.Fprintf(&out, "    May first stop %s on %s if memory is low.\n", str(peer["workload"]), strings.Join(stringsOf(peer["nodes"]), ", "))
+			}
 		}
 	}
 	if len(arr(result["steps"])) == 0 {

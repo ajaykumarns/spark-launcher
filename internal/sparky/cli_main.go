@@ -339,7 +339,7 @@ func cliDispatch(ctx context.Context, cfg clientConfig, inv *cliInvocation, in i
 			return cliErrorExit(inv, cliInterruptErr(ctx, err), out, errout)
 		}
 		if action == "list" {
-			cliEmitView(inv, out, data, renderProfileList(data))
+			cliEmitView(inv, out, data, cliRender(inv, out, "profile-list", data))
 			return 0
 		}
 		cliEmitView(inv, out, data, renderProfile(data))

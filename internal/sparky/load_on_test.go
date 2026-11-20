@@ -37,8 +37,8 @@ func onTestConfig(root, backend string) Object {
 			"spark02": Object{"direct_ip": "10.0.0.2", "ssh": "spark02h", "comfy_unit": "comfy.service"},
 		},
 		"policy": Object{"interrupt_active_jobs": false, "protected_models": []any{},
-			"comfyui_exclusive_with_llms": true, "comfyui_shared_llms": []any{},
-			"comfyui_min_available_gib": 18},
+			"comfyui_exclusive_with_llms": true,
+			"comfyui_min_available_gib":   18},
 		"models": Object{
 			"gemma": Object{"kind": "llm", "name": "Gemma", "run_on": "spark01", "keep_loaded": false,
 				"reasoning": true, "aliases": []any{"gem"},

@@ -29,9 +29,10 @@ profiles:
 
 The YAML key (for example, `everyday`) is the profile ID. Use it in plan
 and apply commands. The optional `description` explains the profile in the
-CLI and the Switch profile menu.
+CLI and the Switch Profile menu.
 
-Use `sparky profile list` to list profiles, descriptions, and capabilities. Use
+Use `sparky profile list` (or `sparky profiles list`) to list profiles,
+descriptions, and capabilities. Use
 `sparky profile plan everyday` to preview the switch. Use
 `sparky profile apply everyday` to apply it. All three commands accept
 `--json`. Pass the plan's JSON `plan_id` to
@@ -44,10 +45,11 @@ Sparky confirms readiness. It stops loaded models outside the profile.
 A changed model may require a stop and a start. Sparky reads the capability
 groups and their provider lists in file order to start models. Start a model
 with a high memory floor before a model that can share the remaining memory.
-Sparky checks the
-startup floor again as each model starts. If a retained model leaves too
-little memory to start another model, the plan can block. It does not
-silently evict the retained model.
+The plan shows which later models Sparky may restart to meet an earlier
+model's startup memory floor. Apply checks memory after the planned stops.
+If memory is still low, Sparky stops only the listed models it needs to
+make room. It starts them again in profile order. Protected models stay
+running.
 
 Apply makes a fresh plan on the controller. It uses the existing lifecycle
 and request drain rules. New model requests may wait while the controller

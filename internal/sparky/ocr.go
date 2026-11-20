@@ -152,49 +152,49 @@ func (s *ocrService) ocrEnvFile(source string) string {
 // container is nil,nil; any other Docker failure is an error.
 func (s *ocrService) ocrInspect() (Object, error) {
 	template := `{"status":{{json .State.Status}},"running":{{json .State.Running}},` +
-		`"health":{{json .State.Health.Status}},"image":{{json .Config.Image}},` +
+		`"health":{{with index .State "Health"}}{{json .Status}}{{else}}null{{end}},"image":{{json .Config.Image}},` +
 		`"project":{{json (index .Config.Labels "com.docker.compose.project")}}}`
 	result, err := ocrRun([]string{"sudo", "-n", "docker", "inspect", "--format", template, "spark-ocr"}, nil, 30*time.Second)
 	if err != nil {
-		return nil, fail("Cannot inspect OCR. Check Docker and administrator access on Spark01.")
+		return nil, fail("Cannot inspect OCR. Check Docker and administrator access on the selected Spark.")
 	}
 	if result.Code != 0 {
 		// Partial stdout with a nonzero status is still a failure.
 		if strings.Contains(strings.ToLower(result.Err), "no such") {
 			return nil, nil
 		}
-		return nil, fail("Cannot inspect OCR. Check Docker and administrator access on Spark01.")
+		return nil, fail("Cannot inspect OCR. Check Docker and administrator access on the selected Spark.")
 	}
 	info, err := decode([]byte(strings.TrimSpace(result.Out)))
 	if err != nil {
-		return nil, fail("Cannot inspect OCR. Check Docker and administrator access on Spark01.")
+		return nil, fail("Cannot inspect OCR. Check Docker and administrator access on the selected Spark.")
 	}
 	for key := range info {
 		switch key {
 		case "status", "running", "health", "image", "project":
 		default:
-			return nil, fail("Cannot inspect OCR. Check Docker and administrator access on Spark01.")
+			return nil, fail("Cannot inspect OCR. Check Docker and administrator access on the selected Spark.")
 		}
 	}
 	if str(info["status"]) == "" {
-		return nil, fail("Cannot inspect OCR. Check Docker and administrator access on Spark01.")
+		return nil, fail("Cannot inspect OCR. Check Docker and administrator access on the selected Spark.")
 	}
 	if _, ok := info["running"].(bool); !ok {
-		return nil, fail("Cannot inspect OCR. Check Docker and administrator access on Spark01.")
+		return nil, fail("Cannot inspect OCR. Check Docker and administrator access on the selected Spark.")
 	}
 	if v := info["image"]; v != nil {
 		if _, ok := v.(string); !ok {
-			return nil, fail("Cannot inspect OCR. Check Docker and administrator access on Spark01.")
+			return nil, fail("Cannot inspect OCR. Check Docker and administrator access on the selected Spark.")
 		}
 	}
 	if v := info["health"]; v != nil {
 		if _, ok := v.(string); !ok {
-			return nil, fail("Cannot inspect OCR. Check Docker and administrator access on Spark01.")
+			return nil, fail("Cannot inspect OCR. Check Docker and administrator access on the selected Spark.")
 		}
 	}
 	if v := info["project"]; v != nil {
 		if _, ok := v.(string); !ok {
-			return nil, fail("Cannot inspect OCR. Check Docker and administrator access on Spark01.")
+			return nil, fail("Cannot inspect OCR. Check Docker and administrator access on the selected Spark.")
 		}
 	}
 	return info, nil

@@ -49,3 +49,34 @@ func probeLayout(picking bool) string {
 	defer C.free(unsafe.Pointer(p))
 	return C.GoString(p)
 }
+
+func probeSelectedProfile() string {
+	p := C.sparky_probe_selected_profile()
+	if p == nil {
+		return ""
+	}
+	defer C.free(unsafe.Pointer(p))
+	return C.GoString(p)
+}
+
+func probeSubtitle() string {
+	p := C.sparky_probe_subtitle()
+	if p == nil {
+		return ""
+	}
+	defer C.free(unsafe.Pointer(p))
+	return C.GoString(p)
+}
+
+func probeChoiceSubtitle(id string) string {
+	key := cstr(id)
+	defer freeC([]*C.char{key})
+	p := C.sparky_probe_choice_subtitle(key)
+	if p == nil {
+		return ""
+	}
+	defer C.free(unsafe.Pointer(p))
+	return C.GoString(p)
+}
+
+func probeProfileSpinner() bool { return C.sparky_probe_profile_spinner() != 0 }

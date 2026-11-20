@@ -197,7 +197,6 @@ func imageConfig(root, engineURL, llmURL string) Object {
 		},
 		"policy": Object{"interrupt_active_jobs": false, "protected_models": []any{},
 			"comfyui_exclusive_with_llms": false,
-			"comfyui_shared_llms":         []any{"glm"},
 			"comfyui_min_available_gib":   18},
 		"auto": Object{"targets": []any{"glm"}, "default": "glm"},
 		"models": Object{

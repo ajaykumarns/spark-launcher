@@ -29,9 +29,17 @@ func nativePickerCase() error {
 		return fmt.Errorf("headless panel construction failed (code %d)", code)
 	}
 
+	panelSetPicker(true, "Loading profiles…", nil, nil, nil, "")
+	if !probeProfileSpinner() || probeChoiceRows() != 0 {
+		return fmt.Errorf("initial profile fetch must show a spinner")
+	}
+
 	labels := []string{"Spark Auto", "DeepSeek V3", "GLM 4.6"}
 	ids := []string{"spark-auto", "deepseek-v3", "glm-4.6"}
-	panelSetPicker(true, "Select a profile", labels, ids)
+	panelSetPicker(false, "Select a profile", labels, ids, []string{"", "Chat and OCR", ""}, "deepseek-v3")
+	if probeProfileSpinner() {
+		return fmt.Errorf("profile spinner persisted after list loaded")
+	}
 	if rows := probeChoiceRows(); rows != len(labels) {
 		return fmt.Errorf("initial picker rows = %d, want %d", rows, len(labels))
 	}
@@ -39,23 +47,34 @@ func nativePickerCase() error {
 		return fmt.Errorf("initial picker caption = %q", caption)
 	}
 
+	if subtitle := probeChoiceSubtitle("deepseek-v3"); subtitle != "Chat and OCR" {
+		return fmt.Errorf("switch profile subtitle = %q", subtitle)
+	}
+	if selected := probeSelectedProfile(); selected != "deepseek-v3" {
+		return fmt.Errorf("initial checked profile = %q", selected)
+	}
+	panelSetPicker(false, "Select a profile", labels, ids, []string{"", "Chat and OCR", ""}, "glm-4.6")
+	if selected := probeSelectedProfile(); selected != "glm-4.6" {
+		return fmt.Errorf("updated checked profile = %q", selected)
+	}
+
 	// A changed catalog forces the rebuild path (ClearStack + reinsert), which
 	// is where the original crash occurred.
 	replacement := []string{"Spark Auto", "Kimi K2"}
 	replacementIDs := []string{"spark-auto", "kimi-k2"}
-	panelSetPicker(true, "Select a profile", replacement, replacementIDs)
+	panelSetPicker(false, "Select a profile", replacement, replacementIDs, nil, "kimi-k2")
 	if rows := probeChoiceRows(); rows != len(replacement) {
 		return fmt.Errorf("replacement rows = %d, want %d", rows, len(replacement))
 	}
 
 	// Identical catalog must not rebuild (keeps keyboard focus); rows stay.
-	panelSetPicker(true, "Select a profile", replacement, replacementIDs)
+	panelSetPicker(false, "Select a profile", replacement, replacementIDs, nil, "kimi-k2")
 	if rows := probeChoiceRows(); rows != len(replacement) {
 		return fmt.Errorf("identical-catalog rows = %d, want %d", rows, len(replacement))
 	}
 
 	// Empty catalog (loading/empty state) must clear the stack cleanly.
-	panelSetPicker(true, "Waiting for the CLI catalog…", nil, nil)
+	panelSetPicker(false, "Waiting for the CLI catalog…", nil, nil, nil, "")
 	if rows := probeChoiceRows(); rows != 0 {
 		return fmt.Errorf("empty-catalog rows = %d, want 0", rows)
 	}
@@ -67,7 +86,7 @@ func nativePickerCase() error {
 	if code := probeBuildPanel(); code != 0 {
 		return fmt.Errorf("probe after overview return failed (code %d)", code)
 	}
-	panelSetPicker(false, "Select a profile", replacement, replacementIDs)
+	panelSetPicker(false, "Select a profile", replacement, replacementIDs, nil, "kimi-k2")
 	if rows := probeChoiceRows(); rows != len(replacement) {
 		return fmt.Errorf("overview-mode rows = %d, want %d", rows, len(replacement))
 	}
@@ -86,18 +105,27 @@ func TestMain(m *testing.M) {
 }
 
 func nativeLayoutCase() error {
-	panelSetContent(panelStrings{
+	content := panelStrings{
 		HeaderTitle: "Sparky", HeaderState: "Ready", ModelCaption: "Language model",
-		ModelName: "deepseek-v4.1-flash-1017", ModelLocation: "Ready on Spark 1 + Spark 2",
-		MemoryCaption: "Device memory · in use / total", LoadLabel: "Switch profile…",
+		ModelName: "Profile: daily", ModelLocation: "Chat and transcription",
+		MemoryCaption: "Device memory · in use / total", LoadLabel: "Switch Profile",
 		RefreshLabel: "Refresh status", Footer: "Updated just now",
-	})
+	}
+	panelSetContent(content)
 	panelSetMemoryRows([]panelPair{{"Spark 1", "114.6 / 121.7 GiB"}, {"Spark 2", "115.4 / 121.7 GiB"}})
 	panelSetRequests("Active requests", "0")
+	if subtitle := probeSubtitle(); subtitle != "Chat and transcription" {
+		return fmt.Errorf("profile subtitle = %q", subtitle)
+	}
+	content.ModelLocation = ""
+	panelSetContent(content)
+	if subtitle := probeSubtitle(); subtitle != "" {
+		return fmt.Errorf("optional subtitle should be hidden, got %q", subtitle)
+	}
 	if err := probeLayout(false); err != "" {
 		return fmt.Errorf("overview: %s", err)
 	}
-	panelSetPicker(true, "Select a profile", []string{"DeepSeek", strings.Repeat("Long model name ", 8)}, []string{"deepseek", "long"})
+	panelSetPicker(false, "Select a profile", []string{"DeepSeek", strings.Repeat("Long model name ", 8)}, []string{"deepseek", "long"}, nil, "")
 	if err := probeLayout(true); err != "" {
 		return fmt.Errorf("picker: %s", err)
 	}

@@ -237,7 +237,7 @@ func parseStatus(data object) (Snapshot, error) {
 	}
 
 	profile := obj(data["profile"])
-	return Snapshot{Models: models, Devices: devices, ProfileName: str(profile["name"]), Capabilities: profileCapabilities(profile)}, nil
+	return Snapshot{Models: models, Devices: devices, ProfileName: str(profile["name"]), ProfileDescription: str(profile["description"]), Capabilities: profileCapabilities(profile)}, nil
 }
 
 func sortedKeys(m object) []string {
