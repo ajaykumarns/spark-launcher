@@ -31,7 +31,7 @@ func nativePickerCase() error {
 
 	labels := []string{"Spark Auto", "DeepSeek V3", "GLM 4.6"}
 	ids := []string{"spark-auto", "deepseek-v3", "glm-4.6"}
-	panelSetPicker(true, "Select a profile", labels, ids, "deepseek-v3")
+	panelSetPicker(true, "Select a profile", labels, ids, []string{"", "Chat and OCR", ""}, "deepseek-v3")
 	if rows := probeChoiceRows(); rows != len(labels) {
 		return fmt.Errorf("initial picker rows = %d, want %d", rows, len(labels))
 	}
@@ -39,10 +39,13 @@ func nativePickerCase() error {
 		return fmt.Errorf("initial picker caption = %q", caption)
 	}
 
+	if subtitle := probeChoiceSubtitle("deepseek-v3"); subtitle != "Chat and OCR" {
+		return fmt.Errorf("switch profile subtitle = %q", subtitle)
+	}
 	if selected := probeSelectedProfile(); selected != "deepseek-v3" {
 		return fmt.Errorf("initial checked profile = %q", selected)
 	}
-	panelSetPicker(true, "Select a profile", labels, ids, "glm-4.6")
+	panelSetPicker(true, "Select a profile", labels, ids, []string{"", "Chat and OCR", ""}, "glm-4.6")
 	if selected := probeSelectedProfile(); selected != "glm-4.6" {
 		return fmt.Errorf("updated checked profile = %q", selected)
 	}
@@ -51,19 +54,19 @@ func nativePickerCase() error {
 	// is where the original crash occurred.
 	replacement := []string{"Spark Auto", "Kimi K2"}
 	replacementIDs := []string{"spark-auto", "kimi-k2"}
-	panelSetPicker(true, "Select a profile", replacement, replacementIDs, "kimi-k2")
+	panelSetPicker(true, "Select a profile", replacement, replacementIDs, nil, "kimi-k2")
 	if rows := probeChoiceRows(); rows != len(replacement) {
 		return fmt.Errorf("replacement rows = %d, want %d", rows, len(replacement))
 	}
 
 	// Identical catalog must not rebuild (keeps keyboard focus); rows stay.
-	panelSetPicker(true, "Select a profile", replacement, replacementIDs, "kimi-k2")
+	panelSetPicker(true, "Select a profile", replacement, replacementIDs, nil, "kimi-k2")
 	if rows := probeChoiceRows(); rows != len(replacement) {
 		return fmt.Errorf("identical-catalog rows = %d, want %d", rows, len(replacement))
 	}
 
 	// Empty catalog (loading/empty state) must clear the stack cleanly.
-	panelSetPicker(true, "Waiting for the CLI catalog…", nil, nil, "")
+	panelSetPicker(true, "Waiting for the CLI catalog…", nil, nil, nil, "")
 	if rows := probeChoiceRows(); rows != 0 {
 		return fmt.Errorf("empty-catalog rows = %d, want 0", rows)
 	}
@@ -75,7 +78,7 @@ func nativePickerCase() error {
 	if code := probeBuildPanel(); code != 0 {
 		return fmt.Errorf("probe after overview return failed (code %d)", code)
 	}
-	panelSetPicker(false, "Select a profile", replacement, replacementIDs, "kimi-k2")
+	panelSetPicker(false, "Select a profile", replacement, replacementIDs, nil, "kimi-k2")
 	if rows := probeChoiceRows(); rows != len(replacement) {
 		return fmt.Errorf("overview-mode rows = %d, want %d", rows, len(replacement))
 	}
@@ -114,7 +117,7 @@ func nativeLayoutCase() error {
 	if err := probeLayout(false); err != "" {
 		return fmt.Errorf("overview: %s", err)
 	}
-	panelSetPicker(true, "Select a profile", []string{"DeepSeek", strings.Repeat("Long model name ", 8)}, []string{"deepseek", "long"}, "")
+	panelSetPicker(true, "Select a profile", []string{"DeepSeek", strings.Repeat("Long model name ", 8)}, []string{"deepseek", "long"}, nil, "")
 	if err := probeLayout(true); err != "" {
 		return fmt.Errorf("picker: %s", err)
 	}

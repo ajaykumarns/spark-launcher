@@ -67,3 +67,14 @@ func probeSubtitle() string {
 	defer C.free(unsafe.Pointer(p))
 	return C.GoString(p)
 }
+
+func probeChoiceSubtitle(id string) string {
+	key := cstr(id)
+	defer freeC([]*C.char{key})
+	p := C.sparky_probe_choice_subtitle(key)
+	if p == nil {
+		return ""
+	}
+	defer C.free(unsafe.Pointer(p))
+	return C.GoString(p)
+}

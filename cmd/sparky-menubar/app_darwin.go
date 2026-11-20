@@ -164,10 +164,12 @@ func (a *menuApp) renderLocked() {
 		v.LoadResult = a.profileResult
 	}
 	v.PickerCaption = a.pickerCaption()
+	var descriptions []string
 	if a.catalogErr == "" {
 		for _, choice := range a.profiles {
 			v.Choices = append(v.Choices, choice.Name)
 			v.ChoiceIDs = append(v.ChoiceIDs, choice.ID)
+			descriptions = append(descriptions, choice.Description)
 		}
 	}
 
@@ -190,7 +192,7 @@ func (a *menuApp) renderLocked() {
 	}
 	panelSetMemoryRows(pairs)
 	panelSetRequests(v.RequestsRow.Label, v.RequestsRow.Value)
-	panelSetPicker(v.Picking, v.PickerCaption, v.Choices, v.ChoiceIDs, snap.ProfileName)
+	panelSetPicker(v.Picking, v.PickerCaption, v.Choices, v.ChoiceIDs, descriptions, snap.ProfileName)
 	panelSetEnabled(v.LoadEnabled, v.RefreshEnabled, v.HasCLI)
 	panelSetSettings(v.ShowTitle, menubarui.LoginEnabled())
 

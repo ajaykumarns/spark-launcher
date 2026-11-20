@@ -79,6 +79,7 @@ static NSString *Str(const char *s) { return s ? [NSString stringWithUTF8String:
 @property (nonatomic, strong) NSMenuItem *resultItem;
 @property (nonatomic, strong) NSMenuItem *catalogItem;
 @property (nonatomic, strong) NSMenuItem *locationItem;
+@property (nonatomic, strong) NSMenuItem *modelItem;
 @property (nonatomic, strong) SparkyInfoRow *model;
 @property (nonatomic, strong) SparkyInfoRow *location;
 @property (nonatomic, strong) SparkyInfoRow *memoryCaption;
@@ -93,6 +94,7 @@ static NSString *Str(const char *s) { return s ? [NSString stringWithUTF8String:
 @property (nonatomic, strong) NSArray<NSString *> *memoryValues;
 @property (nonatomic, strong) NSArray<NSString *> *choiceLabels;
 @property (nonatomic, strong) NSArray<NSString *> *choiceIDs;
+@property (nonatomic, strong) NSArray<NSString *> *choiceDescriptions;
 @property (nonatomic, strong) NSString *pickerCaption;
 @property (nonatomic, strong) NSString *selectedProfile;
 @property (nonatomic) BOOL tracking;
@@ -135,7 +137,8 @@ static NSMenuItem *Info(NSView *row) {
         self.menu.delegate = self;
         self.models.delegate = self;
         self.extras = @[]; self.memoryLabels = @[]; self.memoryValues = @[];
-        self.choiceLabels = @[]; self.choiceIDs = @[]; self.pickerCaption = @"Loading profiles…";
+        self.choiceLabels = @[]; self.choiceIDs = @[]; self.choiceDescriptions = @[];
+        self.pickerCaption = @"Loading profiles…";
         self.model = [[SparkyInfoRow alloc] initSmall:NO strong:YES pair:NO];
         self.location = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
         self.memoryCaption = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
@@ -144,6 +147,7 @@ static NSMenuItem *Info(NSView *row) {
         self.result = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
         self.catalogState = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
         [self.model setLeft:@"Waiting for status" right:@""];
+        self.modelItem = Action(@"Waiting for status", NULL, nil, @"");
         self.loadItem = Action(@"Switch Profile", NULL, nil, @"");
         self.loadItem.submenu = self.models;
         self.refreshItem = Action(@"Refresh status", @selector(refresh:), self, @"");
@@ -161,10 +165,14 @@ static NSMenuItem *Info(NSView *row) {
 }
 - (void)buildMain {
     [self.menu removeAllItems];
-    [self.menu addItem:Info(self.model)];
-    self.locationItem = Info(self.location);
-    self.locationItem.hidden = !self.location.left.stringValue.length;
-    [self.menu addItem:self.locationItem];
+    if (@available(macOS 14.4, *)) {
+        [self.menu addItem:self.modelItem];
+    } else {
+        [self.menu addItem:Info(self.model)];
+        self.locationItem = Info(self.location);
+        self.locationItem.hidden = !self.location.left.stringValue.length;
+        [self.menu addItem:self.locationItem];
+    }
     NSMutableArray *extraRows = [NSMutableArray array];
     for (NSString *line in self.extras) {
         SparkyInfoRow *row = [[SparkyInfoRow alloc] initSmall:YES strong:NO pair:NO];
@@ -205,7 +213,10 @@ static NSMenuItem *Info(NSView *row) {
     for (NSUInteger i = 0; i < self.choiceIDs.count; i++) {
         NSMenuItem *item = Action(self.choiceLabels[i], @selector(choose:), self, @"");
         item.representedObject = self.choiceIDs[i];
-        item.toolTip = self.choiceLabels[i];
+        NSString *description = self.choiceDescriptions[i];
+        if (@available(macOS 14.4, *))
+            item.subtitle = description.length ? description : nil;
+        item.toolTip = description.length ? description : self.choiceLabels[i];
         item.state = [self.choiceIDs[i] isEqualToString:self.selectedProfile] ? NSControlStateValueOn : NSControlStateValueOff;
         item.enabled = self.loadEnabled && self.hasCLI;
         [self.models addItem:item];
@@ -301,9 +312,14 @@ void sparky_set_panel(const char *headerTitle, const char *headerState,
     OnMain(^{
         SparkyMenuController *c = Controller();
         gItem.button.toolTip = [NSString stringWithFormat:@"%@ · %@", ht, hs];
-        [c.model setLeft:mn right:@""];
-        [c.location setLeft:ml right:@""];
-        c.locationItem.hidden = !ml.length;
+        if (@available(macOS 14.4, *)) {
+            c.modelItem.title = mn;
+            c.modelItem.subtitle = ml.length ? ml : nil;
+        } else {
+            [c.model setLeft:mn right:@""];
+            [c.location setLeft:ml right:@""];
+            c.locationItem.hidden = !ml.length;
+        }
         [c.memoryCaption setLeft:mc right:@""];
         [c.footer setLeft:ft right:@""]; [c.result setLeft:lr right:@""];
         c.resultItem.hidden = !lr.length;
@@ -335,15 +351,21 @@ void sparky_set_requests(const char *label, const char *value) {
     NSString *l=Str(label), *v=Str(value);
     OnMain(^{ [Controller().requests setLeft:l right:v]; });
 }
-void sparky_set_picker(int picking, const char *caption, const char **labels, const char **ids, int count, const char *selected) {
+void sparky_set_picker(int picking, const char *caption, const char **labels, const char **ids,
+                       const char **descriptions, int count, const char *selected) {
     NSString *cap=Str(caption), *current=Str(selected);
-    NSMutableArray *l=[NSMutableArray array], *v=[NSMutableArray array];
-    for (int i=0; i<count && labels && ids; i++) { [l addObject:Str(labels[i])]; [v addObject:Str(ids[i])]; }
+    NSMutableArray *l=[NSMutableArray array], *v=[NSMutableArray array], *d=[NSMutableArray array];
+    for (int i=0; i<count && labels && ids; i++) {
+        [l addObject:Str(labels[i])];
+        [v addObject:Str(ids[i])];
+        [d addObject:descriptions ? Str(descriptions[i]) : @""];
+    }
     OnMain(^{
         SparkyMenuController *c = Controller();
-        BOOL changed = ![c.choiceLabels isEqualToArray:l] || ![c.choiceIDs isEqualToArray:v];
+        BOOL changed = ![c.choiceLabels isEqualToArray:l] || ![c.choiceIDs isEqualToArray:v]
+            || ![c.choiceDescriptions isEqualToArray:d];
         BOOL selectionChanged = ![current isEqualToString:c.selectedProfile];
-        c.pickerCaption=cap; c.choiceLabels=l; c.choiceIDs=v; c.selectedProfile=current;
+        c.pickerCaption=cap; c.choiceLabels=l; c.choiceIDs=v; c.choiceDescriptions=d; c.selectedProfile=current;
         [c.catalogState setLeft:cap right:@""];
         c.catalogItem.hidden = v.count && [cap isEqualToString:@"Select a profile"];
         if (changed) { c.modelsDirty=YES; if (!c.modelTracking) [c buildModels]; }
@@ -394,8 +416,19 @@ char *sparky_probe_selected_profile(void) {
 }
 char *sparky_probe_subtitle(void) {
     SparkyMenuController *c = Controller();
+    if (@available(macOS 14.4, *))
+        return c.modelItem.subtitle ? strdup(c.modelItem.subtitle.UTF8String) : NULL;
     if (c.locationItem.hidden) return NULL;
     return strdup(c.location.left.stringValue.UTF8String);
+}
+char *sparky_probe_choice_subtitle(const char *id) {
+    for (NSMenuItem *item in Controller().models.itemArray) {
+        if (item.action != @selector(choose:) || ![item.representedObject isEqualToString:Str(id)]) continue;
+        if (@available(macOS 14.4, *))
+            return item.subtitle ? strdup(item.subtitle.UTF8String) : NULL;
+        return item.toolTip ? strdup(item.toolTip.UTF8String) : NULL;
+    }
+    return NULL;
 }
 char *sparky_probe_picker_caption(void) { return strdup(Controller().pickerCaption.UTF8String); }
 char *sparky_probe_layout(int picking) {
@@ -405,8 +438,12 @@ char *sparky_probe_layout(int picking) {
         return strdup("actions must use native menu items and a native model submenu");
     if (c.menu.autoenablesItems || c.models.autoenablesItems)
         return strdup("native validation must preserve Go enablement");
-    if (c.menu.itemArray.firstObject.view != c.model)
+    if (@available(macOS 14.4, *)) {
+        if (c.menu.itemArray.firstObject != c.modelItem)
+            return strdup("the profile or model must be the first row");
+    } else if (c.menu.itemArray.firstObject.view != c.model) {
         return strdup("the profile or model must be the first row");
+    }
     for (SparkyInfoRow *row in @[c.model,c.location,c.memoryCaption,c.requests,c.footer]) {
         [row layoutSubtreeIfNeeded];
         if (NSHeight(row.frame)>22 || NSWidth(row.frame)<300 || row.left.maximumNumberOfLines>1)
