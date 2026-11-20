@@ -183,10 +183,7 @@ func ElapsedLabel(d time.Duration) string {
 	return fmt.Sprintf("Loading… %s elapsed", d.Round(time.Second).String())
 }
 
-// IconTitle is the optional short tray title.
-// Loading shows "…" and a stale/error state shows "!". When the user enabled
-// the title, a single loaded model shows its short name and several loaded
-// models show a count. Recovery clears the glyph automatically.
+// IconTitle shows the selected profile and actual loaded model count.
 func IconTitle(s menubar.Snapshot, showTitle bool) string {
 	if s.Loading {
 		return "…"
@@ -197,15 +194,18 @@ func IconTitle(s menubar.Snapshot, showTitle bool) string {
 	if !showTitle {
 		return ""
 	}
-	loaded := LoadedModels(s)
-	switch len(loaded) {
-	case 0:
+	count := len(LoadedModels(s))
+	if s.ProfileName == "" && count == 0 && s.UpdatedAt.IsZero() {
 		return ""
-	case 1:
-		return shortName(loaded[0])
-	default:
-		return fmt.Sprintf("%d models", len(loaded))
 	}
+	label := fmt.Sprintf("%d models", count)
+	if count == 1 {
+		label = "1 model"
+	}
+	if s.ProfileName != "" {
+		return s.ProfileName + " · " + label
+	}
+	return label
 }
 
 // shortName is the last path segment of a model ID, or the display name.

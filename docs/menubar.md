@@ -133,7 +133,7 @@ offered). One click runs
 - "Start at login" (off by default; toggles a per-user LaunchAgent at
   `~/Library/LaunchAgents/local.sparky.menubar.plist`, no admin rights, does not
   start or change any Spark service).
-- "Show title" for the short status icon title.
+- "Show title" for the selected profile and running model count beside the menu bar icon. The title is visible by default.
 - "Copy diagnostics": version, CLI path or error, preferences, status and
   staleness, last error, last load error, refresh result, per-node memory, and
   loaded models. No secrets.

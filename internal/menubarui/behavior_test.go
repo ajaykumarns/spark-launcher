@@ -377,21 +377,27 @@ func TestIconTitleStates(t *testing.T) {
 	if IconTitle(menubar.Snapshot{Error: "x"}, true) != "!" {
 		t.Fatal("error title")
 	}
-	one := menubar.Snapshot{Models: []menubar.ModelStatus{{ID: "garuda/deepseek-v3", Loaded: true}}}
-	if got := IconTitle(one, true); got != "deepseek-v3" {
+	one := menubar.Snapshot{ProfileName: "deepseek", Models: []menubar.ModelStatus{
+		{ID: "garuda/deepseek-v3", Loaded: true, Nodes: []string{"spark01", "spark02"}},
+		{ID: "unloaded"},
+	}}
+	if got := IconTitle(one, true); got != "deepseek · 1 model" {
 		t.Fatalf("single title = %q", got)
 	}
 	if got := IconTitle(one, false); got != "" {
 		t.Fatalf("title must be blank when disabled, got %q", got)
 	}
-	two := menubar.Snapshot{Models: []menubar.ModelStatus{
+	two := menubar.Snapshot{ProfileName: "glm-5.3", Models: []menubar.ModelStatus{
 		{ID: "a", Loaded: true}, {ID: "b", Loaded: true},
 	}}
-	if got := IconTitle(two, true); got != "2 models" {
+	if got := IconTitle(two, true); got != "glm-5.3 · 2 models" {
 		t.Fatalf("multi title = %q", got)
 	}
-	// Recovery clears the glyph.
-	if got := IconTitle(menubar.Snapshot{UpdatedAt: time.Now()}, true); got != "" {
+	if got := IconTitle(menubar.Snapshot{ProfileName: "idle"}, true); got != "idle · 0 models" {
+		t.Fatalf("empty profile title = %q", got)
+	}
+	// Recovery clears the glyph and shows the live count.
+	if got := IconTitle(menubar.Snapshot{UpdatedAt: time.Now()}, true); got != "0 models" {
 		t.Fatalf("recovered title = %q", got)
 	}
 }
