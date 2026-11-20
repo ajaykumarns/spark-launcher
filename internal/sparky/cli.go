@@ -139,8 +139,8 @@ var cliSpecs = map[string]*cliSpec{
 		flagChoices: map[string][]string{"--on": cliPlacements},
 		boolFlags:   []string{"--force"}},
 	"unload": {posMin: 1, posMax: 1, posNames: []string{"model"}, boolFlags: []string{"--force"}},
-	"profile": {posMin: 2, posMax: 2, posNames: []string{"action", "name"},
-		posChoices: map[int][]string{0: {"plan", "apply"}}},
+	"profile": {posMin: 1, posMax: 2, posNames: []string{"action", "name"},
+		posChoices: map[int][]string{0: {"list", "plan", "apply"}}, strFlags: []string{"--expect-plan"}},
 	"image-profile": {posMax: 1, posNames: []string{"mode"},
 		posChoices: map[int][]string{0: cliProfileModes},
 		boolFlags:  []string{"--dry-run"},
@@ -191,7 +191,7 @@ Commands:
   plan ACTION NAME Preview load/unload steps without changing services
   load NAME        Load a model after active work finishes (--on NODE for one load, --force cancels conflicts)
   unload NAME      Unload a model after its active work finishes
-  profile ACTION NAME  Preview or apply a cluster profile
+  profile list | plan NAME | apply NAME  List, preview, or apply profiles
   image-profile    Shared or dedicated image memory limits
   config ACTION    show [MODEL] | validate | placement MODEL ON
   run comfyui FILE Submit a ComfyUI API workflow JSON file
@@ -492,6 +492,19 @@ func cliParseInto(inv *cliInvocation, command string, words []string) error {
 func cliPostValidate(inv *cliInvocation, command string) error {
 	pos := inv.Positional
 	switch command {
+	case "profile":
+		if inv.Help {
+			return nil
+		}
+		if pos[0] == "list" && len(pos) != 1 {
+			return usagef("Unexpected argument: %s%s", pos[1], cliUsageSuffix)
+		}
+		if pos[0] != "list" && len(pos) != 2 {
+			return usagef("Missing argument: name%s", cliUsageSuffix)
+		}
+		if inv.Flags["expect-plan"] && (pos[0] != "apply" || inv.Values["expect-plan"] == "") {
+			return usagef("Use --expect-plan with a plan ID and sparky profile apply.")
+		}
 	case "models":
 		if inv.Flags["installed"] && (inv.Flags["offline"] || len(pos) > 0) {
 			return usagef("--installed cannot be combined with --offline or a model name. Use config show NAME for installed settings.")

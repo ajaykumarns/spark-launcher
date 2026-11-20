@@ -289,6 +289,15 @@ func TestMainRemoteCommandsThroughFakeRunner(t *testing.T) {
 			return respond(`{"memory":"12 GB"}`)
 		case mainNodeRemote("rpc", "plan", "--root", "/srv", "--payload", "-"):
 			return respond(`{"workload":"glm","steps":[{"action":"unload","workload":"other"}]}`)
+		case mainNodeRemote("rpc", "profile-list", "--root", "/srv", "--payload", "-"):
+			return respond(`{"selected":"daily","profiles":[{"name":"daily","description":"Daily chat","capabilities":[{"name":"chat"}]}]}`)
+		case mainNodeRemote("rpc", "profile-plan", "--root", "/srv", "--payload", "-"):
+			return respond(`{"profile":"daily","description":"Daily chat","status":"planned","plan_id":"example","steps":[]}`)
+		case mainNodeRemote("rpc", "profile-apply", "--root", "/srv", "--payload", "-"):
+			if !strings.Contains(string(stdin), `"expected_plan":"example"`) || !strings.Contains(string(stdin), `"name":"daily"`) {
+				return remoteRunResult{}, fmt.Errorf("profile apply payload is incorrect: %q", stdin)
+			}
+			return respond(`{"profile":"daily","description":"Daily chat","status":"applied","steps":[]}`)
 		case mainNodeRemote("load", "--root", "/srv", "--model", "glm"):
 			return respond(`{"status":"loading"}`)
 		case mainNodeRemote("load", "--root", "/srv", "--force", "--model", "glm"):
@@ -330,6 +339,17 @@ func TestMainRemoteCommandsThroughFakeRunner(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "ocr") {
 		t.Fatalf("ocr: %d %q", code, out)
 	}
+	for _, args := range [][]string{
+		{"profile", "list"},
+		{"profile", "plan", "daily"},
+		{"profile", "apply", "daily", "--expect-plan", "example"},
+	} {
+		code, out, errout := runMain(args, "")
+		if code != 0 || !strings.Contains(out, "daily") || !strings.Contains(out, "Daily chat") || errout != "" {
+			t.Fatalf("%v: code=%d stdout=%q stderr=%q", args, code, out, errout)
+		}
+	}
+
 	// image-profile result view.
 	code, out, _ = runMain([]string{"image-profile", "shared", "--json"}, "")
 	if code != 0 || !strings.Contains(out, "shared") {

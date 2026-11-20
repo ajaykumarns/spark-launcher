@@ -20,8 +20,9 @@ func TestProfileApplyNativeLifecycle(t *testing.T) {
 	t.Cleanup(env.joinSupervisor)
 
 	path := filepath.Join(filepath.Dir(env.path), "profiles.yaml")
+	const description = "Chat on one Spark."
 	yaml := "version: 1\nprofiles:\n" +
-		"  single:\n    capabilities:\n      chat:\n        - " + integrationModel + ": spark01\n" +
+		"  single:\n    description: " + description + "\n    capabilities:\n      chat:\n        - " + integrationModel + ": spark01\n" +
 		"  dual:\n    capabilities:\n      chat:\n        - " + integrationModel + ": both\n" +
 		"  empty:\n    capabilities: {}\n"
 	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
@@ -36,13 +37,31 @@ func TestProfileApplyNativeLifecycle(t *testing.T) {
 	if err != nil || boolean(preview["blocked"]) || len(arr(preview["steps"])) != 1 || env.rankStartsTotal() != 0 {
 		t.Fatalf("preview should show one start and change nothing: %v, %v", preview, err)
 	}
+	if str(preview["description"]) != description || !strings.Contains(renderProfile(preview), description) {
+		t.Fatalf("preview should show the description: %v", preview)
+	}
 	if cap := obj(arr(preview["capabilities"])[0]); str(cap["name"]) != "chat" || str(cap["state"]) != "unavailable" {
 		t.Fatalf("a planned start must not be advertised as available: %v", cap)
 	}
 	if _, err := os.Stat(profileStatePath(c.cfg())); !os.IsNotExist(err) {
 		t.Fatalf("preview saved a selection: %v", err)
 	}
-	applied, err := c.Profile("single", true)
+	if _, err := c.Profile("single", true, "stale-preview"); err == nil || env.rankStartsTotal() != 0 {
+		t.Fatalf("a stale plan ID must block before starting a workload: %v", err)
+	}
+	listed, err := listProfiles(env.root)
+	if err != nil || len(arr(listed["profiles"])) != 3 || str(listed["selected"]) != "" {
+		t.Fatalf("list should show configured profiles without applying them: %v, %v", listed, err)
+	}
+
+	rows := arr(listed["profiles"])
+	if str(obj(rows[0])["name"]) != "dual" || obj(rows[0])["description"] != nil ||
+		str(obj(rows[2])["name"]) != "single" || str(obj(rows[2])["description"]) != description ||
+		!strings.Contains(renderProfileList(listed), description) {
+		t.Fatalf("list should show descriptions where defined: %v", listed)
+	}
+
+	applied, err := c.Profile("single", true, str(preview["plan_id"]))
 	if err != nil || str(applied["status"]) != "applied" || env.rankStartsTotal() != 1 {
 		t.Fatalf("apply should load one rank: %v, %v", applied, err)
 	}
@@ -69,8 +88,14 @@ func TestProfileApplyNativeLifecycle(t *testing.T) {
 	if err != nil || before["generation"] != after["generation"] || env.rankStartsTotal() != 1 {
 		t.Fatal("a matching profile restarted the model")
 	}
-	if str(selectedProfile(c.cfg())["name"]) != "single" {
+	selected := selectedProfile(c.cfg())
+	if str(selected["name"]) != "single" || str(selected["description"]) != description {
 		t.Fatal("successful apply did not save the profile")
+	}
+
+	listed, err = listProfiles(env.root)
+	if err != nil || str(listed["selected"]) != "single" {
+		t.Fatalf("list should show the last applied profile: %v, %v", listed, err)
 	}
 
 	preview, err = c.Profile("dual", false)

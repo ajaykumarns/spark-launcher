@@ -144,3 +144,9 @@ func panelSetIcon(state int, title string) {
 	defer freeC([]*C.char{t})
 	C.sparky_set_icon_state(C.int(state), t)
 }
+
+func panelConfirmProfile(name, plan string) bool {
+	title, details := cstr(name), cstr(plan)
+	defer freeC([]*C.char{title, details})
+	return C.sparky_confirm_profile(title, details) != 0
+}

@@ -326,9 +326,21 @@ func cliDispatch(ctx context.Context, cfg clientConfig, inv *cliInvocation, in i
 		cliEmitView(inv, out, data, cliRender(inv, out, "plan", data))
 		return 0
 	case "profile":
-		data, err := cliRemoteRPC(ctx, cfg, "profile-"+inv.Positional[0], Object{"name": inv.Positional[1]})
+		action := inv.Positional[0]
+		payload := Object{}
+		if action != "list" {
+			payload["name"] = inv.Positional[1]
+		}
+		if inv.Flags["expect-plan"] {
+			payload["expected_plan"] = inv.Values["expect-plan"]
+		}
+		data, err := cliRemoteRPC(ctx, cfg, "profile-"+action, payload)
 		if err != nil {
 			return cliErrorExit(inv, cliInterruptErr(ctx, err), out, errout)
+		}
+		if action == "list" {
+			cliEmitView(inv, out, data, renderProfileList(data))
+			return 0
 		}
 		cliEmitView(inv, out, data, renderProfile(data))
 		if boolean(data["blocked"]) || str(data["status"]) == "failed" {

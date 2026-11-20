@@ -507,13 +507,13 @@ func (s *controllerServer) serveControl(w http.ResponseWriter, r *http.Request, 
 		s.respond(w, http.StatusOK, s.ctrl.Admission())
 	case "/control/profile-plan", "/control/profile-apply":
 		controller, ok := s.ctrl.(interface {
-			Profile(name string, apply bool) (Object, error)
+			Profile(name string, apply bool, expected ...string) (Object, error)
 		})
 		if !ok {
 			s.failRequest(w, http.StatusNotImplemented, "Cluster profiles are not available.")
 			return
 		}
-		result, err := controller.Profile(str(body["name"]), path == "/control/profile-apply")
+		result, err := controller.Profile(str(body["name"]), path == "/control/profile-apply", str(body["expected_plan"]))
 		if err != nil {
 			s.failRequest(w, http.StatusConflict, err.Error())
 			return

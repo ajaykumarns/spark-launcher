@@ -2,6 +2,7 @@ package sparky
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -20,37 +21,53 @@ type profileModel struct {
 
 type clusterProfile struct {
 	name         string
+	description  string
 	models       []profileModel
 	capabilities []any
 }
 
-func readProfile(path, name string, cfg Object) (clusterProfile, error) {
-	p := clusterProfile{name: name}
-	if !simpleName.MatchString(name) {
-		return p, fail("Choose a profile name with letters, digits, dots, hyphens, or underscores.")
-	}
+type profileFile struct {
+	Version  int `yaml:"version"`
+	Profiles map[string]struct {
+		Description  yaml.Node `yaml:"description"`
+		Capabilities yaml.Node `yaml:"capabilities"`
+	} `yaml:"profiles"`
+}
+
+func loadProfileFile(path string) (profileFile, error) {
+	var file profileFile
 	source, err := os.Open(path)
 	if err != nil {
-		return p, fail("Read cluster profiles from %s: %v", path, err)
+		return file, fail("Read cluster profiles from %s: %v", path, err)
 	}
 	defer source.Close()
 	decoder := yaml.NewDecoder(source)
 	decoder.KnownFields(true)
-	var file struct {
-		Version  int `yaml:"version"`
-		Profiles map[string]struct {
-			Capabilities yaml.Node `yaml:"capabilities"`
-		} `yaml:"profiles"`
-	}
 	if err := decoder.Decode(&file); err != nil {
-		return p, fail("Invalid profile YAML in %s: %v", path, err)
+		return file, fail("Invalid profile YAML in %s: %v", path, err)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
-		return p, fail("Expected one YAML document in %s.", path)
+		return file, fail("Expected one YAML document in %s.", path)
 	}
 	if file.Version != 1 || file.Profiles == nil {
-		return p, fail("Expected a version 1 profiles file.")
+		return file, fail("Expected a version 1 profiles file.")
+	}
+	return file, nil
+}
+
+func readProfile(path, name string, cfg Object) (clusterProfile, error) {
+	file, err := loadProfileFile(path)
+	if err != nil {
+		return clusterProfile{}, err
+	}
+	return file.profile(name, cfg)
+}
+
+func (file profileFile) profile(name string, cfg Object) (clusterProfile, error) {
+	p := clusterProfile{name: name}
+	if !simpleName.MatchString(name) {
+		return p, fail("Choose a profile name with letters, digits, dots, hyphens, or underscores.")
 	}
 	entry, ok := file.Profiles[name]
 	if !ok {
@@ -59,6 +76,12 @@ func readProfile(path, name string, cfg Object) (clusterProfile, error) {
 			names[n] = true
 		}
 		return p, fail("Unknown profile %s. Available profiles: %s", name, strings.Join(keys(names), ", "))
+	}
+	if d := entry.Description; d.Kind != 0 && d.ShortTag() != "!!null" {
+		if d.Kind != yaml.ScalarNode || d.ShortTag() != "!!str" {
+			return p, fail("The description for profile %s must be text.", name)
+		}
+		p.description = strings.TrimSpace(d.Value)
 	}
 	groups := entry.Capabilities
 	if groups.Kind != yaml.MappingNode {
@@ -122,6 +145,69 @@ func readProfile(path, name string, cfg Object) (clusterProfile, error) {
 		p.capabilities = append(p.capabilities, Object{"name": group, "providers": providers})
 	}
 	return p, nil
+}
+
+func listProfiles(root string) (Object, error) {
+	dir := filepath.Join(root, "config")
+	cfg, err := readCluster(filepath.Join(dir, "models.json"))
+	if err != nil {
+		return nil, err
+	}
+	file, err := loadProfileFile(filepath.Join(dir, "profiles.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	names := Object{}
+	for name := range file.Profiles {
+		names[name] = true
+	}
+	profiles := []any{}
+	for _, name := range keys(names) {
+		row := Object{"name": name}
+		p, err := file.profile(name, cfg)
+		if p.description != "" {
+			row["description"] = p.description
+		}
+		if err != nil {
+			row["error"] = err.Error()
+		} else {
+			row["capabilities"] = p.capabilities
+		}
+		profiles = append(profiles, row)
+	}
+	return Object{"profiles": profiles, "selected": str(selectedProfile(cfg)["name"])}, nil
+}
+
+func renderProfileList(data Object) string {
+	var out strings.Builder
+	for _, raw := range arr(data["profiles"]) {
+		row := obj(raw)
+		name := str(row["name"])
+		if name == str(data["selected"]) {
+			name += " (last applied)"
+		}
+		if problem := str(row["error"]); problem != "" {
+			fmt.Fprintf(&out, "%s — %s\n", name, problem)
+			continue
+		}
+		var groups []string
+		for _, group := range arr(row["capabilities"]) {
+			groups = append(groups, str(obj(group)["name"]))
+		}
+		if len(groups) == 0 {
+			groups = []string{"no capabilities"}
+		}
+		groupList := strings.Join(groups, ", ")
+		if description := strings.Join(strings.Fields(str(row["description"])), " "); description != "" {
+			fmt.Fprintf(&out, "%s — %s (%s)\n", name, description, groupList)
+		} else {
+			fmt.Fprintf(&out, "%s — %s\n", name, groupList)
+		}
+	}
+	if out.Len() == 0 {
+		return "No profiles defined.\n"
+	}
+	return out.String()
 }
 
 func profileCapability(name string, model Object) string {
@@ -290,14 +376,18 @@ func planProfile(cfg Object, p clusterProfile, snapshot Object, ready func(profi
 		}
 		routes[route.alias] = eligible
 	}
-	return Object{"profile": p.name, "status": "planned", "kept": kept, "steps": steps,
+	result := Object{"profile": p.name, "status": "planned", "kept": kept, "steps": steps,
 		"blockers": blockers, "blocked": len(blockers) > 0, "expected_routes": routes,
 		"capabilities": profileAvailability(p.capabilities, func(provider Object) bool {
 			return profileProviderKept(kept, provider)
 		})}
+	if p.description != "" {
+		result["description"] = p.description
+	}
+	return result
 }
 
-func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
+func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Object, error) {
 	budget := 60 * time.Second
 	if apply {
 		budget = 2 * time.Hour
@@ -351,8 +441,17 @@ func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
 		}), nil
 	}
 	result, err := preview()
-	if err != nil || !apply || boolean(result["blocked"]) {
-		return result, err
+	if err != nil {
+		return nil, err
+	}
+	result["plan_id"] = fmt.Sprintf("%x", sha256.Sum256(jsonBytes(Object{
+		"name": name, "description": p.description, "config": cfg, "providers": p.capabilities, "steps": result["steps"],
+	})))
+	if !apply || boolean(result["blocked"]) {
+		return result, nil
+	}
+	if len(expected) > 0 && expected[0] != "" && expected[0] != str(result["plan_id"]) {
+		return nil, fail("The profile plan changed. Preview the new plan before applying it.")
 	}
 	if c.Fenced() {
 		return nil, fail("Admission is paused. Retry after it resumes.")
@@ -422,7 +521,11 @@ func (c *Coordinator) Profile(name string, apply bool) (Object, error) {
 	if err := checkConfig(); err != nil {
 		return failed(err)
 	}
-	if err := writeObject(profileStatePath(cfg), Object{"name": name, "applied_at": time.Now().UTC(), "capabilities": p.capabilities}); err != nil {
+	state := Object{"name": name, "applied_at": time.Now().UTC(), "capabilities": p.capabilities}
+	if p.description != "" {
+		state["description"] = p.description
+	}
+	if err := writeObject(profileStatePath(cfg), state); err != nil {
 		return failed(fail("Could not save the selected profile: %v", err))
 	}
 	result["status"], result["completed"] = "applied", completed
@@ -489,6 +592,9 @@ func profileCapabilitySummary(groups []any) string {
 func renderProfile(result Object) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "Profile %s (%s)\n", str(result["profile"]), str(result["status"]))
+	if description := strings.Join(strings.Fields(str(result["description"])), " "); description != "" {
+		fmt.Fprintln(&out, description)
+	}
 	if groups := arr(result["capabilities"]); len(groups) > 0 {
 		if str(result["status"]) == "failed" {
 			out.WriteString("Capabilities before apply\n")

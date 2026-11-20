@@ -52,6 +52,7 @@ func (c *Controller) Snapshot() Snapshot {
 
 func (c *Controller) snapshotLocked() Snapshot {
 	out := c.snap
+	out.Capabilities = append([]ProfileCapability(nil), c.snap.Capabilities...)
 	out.Models = make([]ModelStatus, len(c.snap.Models))
 	for i, m := range c.snap.Models {
 		cp := m
@@ -108,6 +109,8 @@ func (c *Controller) Refresh(ctx context.Context) error {
 		return c.recordRefreshError(errors.New("Status refresh returned invalid data. Update Sparky on this Mac and the Sparks."))
 	}
 	c.mu.Lock()
+	c.snap.ProfileName = parsed.ProfileName
+	c.snap.Capabilities = parsed.Capabilities
 	c.snap.Models = parsed.Models
 	c.snap.Devices = parsed.Devices
 	c.snap.UpdatedAt = c.now()
