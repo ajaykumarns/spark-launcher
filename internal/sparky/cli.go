@@ -197,7 +197,7 @@ Commands:
   run comfyui FILE Submit a ComfyUI API workflow JSON file
   sync             Refresh the Hermes Spark provider from the live model list
   logs             Recent local harness launches (--limit N)
-  doctor [HARNESS] Check gateway access and harness installation; no inference
+  doctor [HARNESS] Check gateway access, harness installation, and the OCR route
   update           Update the Mac CLI and both Sparks (--check previews only)
   ui               Open the gateway UI (--json prints the URL)
   init             Create the client connection file (--gateway REQUIRED)

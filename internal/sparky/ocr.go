@@ -86,15 +86,26 @@ type ocrService struct {
 	root     string
 	metadata string
 	log      string
+	host     string
 }
 
 // newOCRService validates the root before any effect happens.
 func newOCRService(root string) (*ocrService, error) {
+	return newOCRServiceOnHost(root, "spark01")
+}
+
+// newOCRServiceOnHost validates the root before any effect happens and
+// names the Spark the service runs on. The host word only drives reporting;
+// every effect stays local to the selected Spark.
+func newOCRServiceOnHost(root, host string) (*ocrService, error) {
 	if root == "" || !filepath.IsAbs(root) {
 		return nil, fail("The cluster root must be an absolute path.")
 	}
+	if host == "" {
+		host = "spark01"
+	}
 	home := filepath.Join(root, "ocr")
-	return &ocrService{home: home, root: root, metadata: filepath.Join(home, "sparky-install.json")}, nil
+	return &ocrService{home: home, root: root, metadata: filepath.Join(home, "sparky-install.json"), host: host}, nil
 }
 
 // ocrRecord reads the installation metadata. A missing file yields an empty
@@ -244,7 +255,7 @@ func (s *ocrService) ocrStatus() (Object, error) {
 	}
 	return Object{
 		"service":   "ocr",
-		"host":      "spark01",
+		"host":      s.host,
 		"installed": installed,
 		"state":     status,
 		"running":   running,
@@ -489,7 +500,11 @@ func ManageOCR(root string, payload Object) (Object, error) {
 	if !allowed {
 		return nil, fail("Choose OCR install, status, start, or stop.")
 	}
-	service, err := newOCRService(root)
+	host := str(payload["host"])
+	if host == "" {
+		host = "spark01"
+	}
+	service, err := newOCRServiceOnHost(root, host)
 	if err != nil {
 		return nil, err
 	}
@@ -688,15 +703,15 @@ func (s *ocrService) ocrInstall(payload Object) (Object, error) {
 	cached := false
 	switch {
 	case inspectErr != nil:
-		return nil, fail("Cannot inspect the OCR image. Check Docker and administrator access on Spark01.")
+		return nil, fail("Cannot inspect the OCR image. Check Docker and administrator access on %s.", s.host)
 	case inspectOut.Code != 0:
 		if !strings.Contains(strings.ToLower(inspectOut.Err), "no such image") {
-			return nil, fail("Cannot inspect the OCR image. Check Docker and administrator access on Spark01.")
+			return nil, fail("Cannot inspect the OCR image. Check Docker and administrator access on %s.", s.host)
 		}
 	case ocrImageID.MatchString(strings.TrimSpace(inspectOut.Out)):
 		cached = true
 	default:
-		return nil, fail("Cannot inspect the OCR image. Check Docker and administrator access on Spark01.")
+		return nil, fail("Cannot inspect the OCR image. Check Docker and administrator access on %s.", s.host)
 	}
 	if (hasRebuild && rebuild) || !cached {
 		if err := runStream([]string{"sudo", "-n", "docker", "build", "-f", filepath.Join(source, "deploy", "Dockerfile.indra"), "-t", indra, source}, 7200*time.Second); err != nil {

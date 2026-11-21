@@ -41,6 +41,14 @@ func arr(v any) []any {
 			out = append(out, s)
 		}
 		return out
+	case []Object:
+		// Typed Object collections produced by Go code are treated like
+		// JSON arrays instead of silently disappearing.
+		out := make([]any, 0, len(x))
+		for _, o := range x {
+			out = append(out, o)
+		}
+		return out
 	}
 	return nil
 }

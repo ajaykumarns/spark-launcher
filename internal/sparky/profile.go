@@ -657,6 +657,9 @@ func renderProfile(result Object) string {
 		}
 		out.WriteString(profileCapabilitySummary(groups))
 	}
+	if verification := routeVerificationBlock(result); verification != "" {
+		out.WriteString("\n" + verification)
+	}
 	stepKeys := []string{"kept", "steps"}
 	if str(result["status"]) == "failed" {
 		stepKeys = []string{"completed"}

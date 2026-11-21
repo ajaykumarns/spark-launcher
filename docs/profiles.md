@@ -99,8 +99,25 @@ can interrupt active audio or OCR requests. Profile apply does not change system
 The plan reports expected chat and decision auto targets using the current
 Bifrost routing policy. Existing route reconciliation uses live model
 readiness. `sparky status` reports the last applied profile and actual running
-state. Plans show which requested capabilities are available now. Apply
-reports availability after it verifies the selected providers.
+state. Plans show which requested capabilities are available now. Availability
+here means the service is running and ready on its node — it is not proof
+that the route through the gateway works.
+
+After a successful apply, the CLI sends one tiny OCR request through the
+gateway and reports the result under "Route verification". A verified OCR
+route means the route reaches the OCR service on its declared node; a failed
+check fails the command, so a cron or the menu bar sees a loud failure instead
+of an unverified success. Other capabilities (speech, transcription, images)
+are reported as "not verified" until a real probe exists for them — a running
+service is reported as running, never as verified. `sparky doctor` checks the
+same OCR route and exits nonzero when it fails.
+
+The gateway's per-provider routes (for example the OCR provider's base URL)
+are not re-written by Profile apply. They are written once when the provider
+is installed, and drift after an OCR placement change is detected by the
+route verification above. To re-point a provider after moving its service,
+edit the provider through the gateway admin API (the same base-URL-only
+pattern the installation uses) and re-run `sparky doctor`.
 
 During apply, the CLI and menu bar show every active step and its elapsed
 time. JSON status includes these steps in `profile_transition.active_steps`.

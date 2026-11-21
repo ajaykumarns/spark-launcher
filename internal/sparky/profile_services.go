@@ -93,8 +93,9 @@ func profileOCRRunning(snapshot Object, node string) bool {
 }
 
 func (r *Runtime) profileOCR(ctx context.Context, node, action string) (Object, error) {
-	payload := Object{"action": action}
+	payload := Object{"action": action, "host": node}
 	if node == "spark01" {
+		payload["host"] = "spark01"
 		return ManageOCR(r.root(), payload)
 	}
 	host := str(obj(obj(r.config()["nodes"])[node])["ssh"])

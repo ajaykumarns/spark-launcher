@@ -1004,7 +1004,28 @@ func formatDoctor(data Object, width int, color bool) string {
 		}
 		rows = append(rows, styledRow{str(check["name"]), result, str(check["message"])})
 	}
-	return table([]string{"CHECK", "RESULT", "DETAIL"}, rows, "Connection checks", width, color) + "\n" + note("No inference was run.", "dim", color, width)
+	out := table([]string{"CHECK", "RESULT", "DETAIL"}, rows, "Connection checks", width, color)
+	routes := arr(data["routes"])
+	if len(routes) > 0 {
+		routeRows := []styledRow{}
+		for _, item := range routes {
+			check := obj(item)
+			result := "failed"
+			if str(check["status"]) == "verified" {
+				result = "ok"
+			}
+			if str(check["status"]) == "not_verified" {
+				result = "not verified"
+			}
+			routeRows = append(routeRows, styledRow{profileLabel(str(check["capability"])), result, strings.Join(strings.Fields(str(check["detail"])), " ")})
+		}
+		out += "\n" + table([]string{"ROUTE", "RESULT", "DETAIL"}, routeRows, "Route verification", width, color)
+	}
+	noteText := "No inference was run."
+	if len(routes) > 0 {
+		noteText = "One tiny OCR request was sent through the gateway."
+	}
+	return out + "\n" + note(noteText, "dim", color, width)
 }
 
 func formatOCR(result Object, color bool, width int) string {

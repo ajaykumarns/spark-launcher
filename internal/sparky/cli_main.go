@@ -348,8 +348,15 @@ func cliDispatch(ctx context.Context, cfg clientConfig, inv *cliInvocation, in i
 			cliEmitView(inv, out, data, cliRender(inv, out, "profile-list", data))
 			return 0
 		}
+		if action == "apply" {
+			// After a successful apply, check the gateway routes the
+			// profile's capabilities point at. A failed check fails the
+			// command, so the cron sees a loud failure instead of an
+			// unverified success.
+			foldProfileVerification(ctx, cfg, data)
+		}
 		cliEmitView(inv, out, data, renderProfile(data))
-		if boolean(data["blocked"]) || str(data["status"]) == "failed" {
+		if boolean(data["blocked"]) || str(data["status"]) == "failed" || profileVerificationFailed(data) {
 			return 1
 		}
 		return 0
@@ -376,7 +383,7 @@ func cliDispatch(ctx context.Context, cfg clientConfig, inv *cliInvocation, in i
 	case "update":
 		return cliUpdateCommand(ctx, cfg, inv, out, errout)
 	case "doctor":
-		data := cliDoctor(cfg, cliPositionalOr(inv, "harness", ""))
+		data := cliDoctor(ctx, cfg, cliPositionalOr(inv, "harness", ""))
 		cliEmitView(inv, out, data, cliRender(inv, out, "doctor", data))
 		if boolean(data["ok"]) {
 			return 0
@@ -680,8 +687,10 @@ func cliSyncCommand(ctx context.Context, cfg clientConfig, inv *cliInvocation, o
 	return 0
 }
 
-// cliDoctor checks gateway access and harness installation; never inference.
-func cliDoctor(cfg clientConfig, harness string) Object {
+// cliDoctor checks gateway access, harness installation, and the OCR route.
+// Route verification is one tiny OCR request through the gateway; nothing
+// else is sent.
+func cliDoctor(ctx context.Context, cfg clientConfig, harness string) Object {
 	checks := []any{}
 	catalog, err := clientFetchCatalog(cfg, false)
 	if err != nil {
@@ -690,6 +699,7 @@ func cliDoctor(cfg clientConfig, harness string) Object {
 		checks = append(checks, Object{"name": "gateway", "ok": true,
 			"message": fmt.Sprintf("Reachable; %d model routes.", len(arr(catalog["models"])))})
 	}
+	routes := verifyProfileRoutes(ctx, cfg, []any{Object{"name": "ocr"}})
 	names := harnessNames
 	if harness != "" {
 		names = []string{harness}
@@ -708,7 +718,12 @@ func cliDoctor(cfg clientConfig, harness string) Object {
 			ok = false
 		}
 	}
-	return Object{"ok": ok, "checks": checks, "inference": false}
+	for _, raw := range routes {
+		if str(obj(raw)["status"]) == "failed" {
+			ok = false
+		}
+	}
+	return Object{"ok": ok, "checks": checks, "routes": routes, "inference": false}
 }
 
 // cliUICommand prints the URL in JSON mode or opens it in a browser.
