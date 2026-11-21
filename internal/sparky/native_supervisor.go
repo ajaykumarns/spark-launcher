@@ -92,6 +92,27 @@ func nativeCloseLocks(locks []*os.File) {
 	}
 }
 
+func nativeStartupLocks(ctx context.Context, stateDir string, nodes []string) ([]*os.File, error) {
+	// Old supervisors take operation.lock exclusively. Keep a shared lock
+	// on that file so mixed versions cannot run overlapping preflights.
+	legacy, err := nativeLockPathsMode(ctx, []string{filepath.Join(stateDir, "operation.lock")}, true)
+	if err != nil {
+		return nil, err
+	}
+	sorted := unionNodes(nil, nodes)
+	sort.Strings(sorted)
+	paths := make([]string, 0, len(sorted))
+	for _, node := range sorted {
+		paths = append(paths, filepath.Join(stateDir, "operation."+node+".lock"))
+	}
+	locks, err := nativeLockPaths(ctx, paths)
+	if err != nil {
+		nativeCloseLocks(legacy)
+		return nil, err
+	}
+	return append(legacy, locks...), nil
+}
+
 // nativeBackendClosed refuses unless the shared backend TCP port answers
 // ECONNREFUSED. A live listener, a stale same-id backend or any unknown
 // dial error (timeout, unreachable, permission) can never mean free.
@@ -436,8 +457,9 @@ func nativeStartup(ctx context.Context, r *Runtime, name, gen string, s Object, 
 	if err := r.TransitionState(name, gen, StateStarting); err != nil {
 		return err
 	}
-	// The startup operation lock is context-aware as well.
-	opLocks, err := nativeLockPaths(ctx, []string{filepath.Join(stateDir, "operation.lock")})
+	// Serialize startup checks on each device, including for shared models.
+	// Independent devices can perform preflight and unit starts in parallel.
+	opLocks, err := nativeStartupLocks(ctx, stateDir, nodes)
 	if err != nil {
 		return err
 	}

@@ -141,6 +141,22 @@ func nativeLayoutCase() error {
 	if err := probeLayout(false); err != "" {
 		return fmt.Errorf("profile switch overview: %s", err)
 	}
+	parallel := menubarui.BuildPanel(menubar.Snapshot{ProfileName: "glm-5.3", UpdatedAt: time.Now(),
+		ProfileTransition: &menubar.ProfileTransition{Name: "qwen-next-flash", Status: "running", Elapsed: time.Minute,
+			ActiveSteps: []menubar.ProfileStepProgress{
+				{Message: "Start Qwen on spark01", Step: 3, Total: 8, Elapsed: 20 * time.Second},
+				{Message: "Start audio on spark02", Step: 6, Total: 8, Elapsed: 3 * time.Second},
+			}}}, menubarui.Prefs{}, nil, false, true)
+	content.ModelLocation = parallel.ModelLocation
+	content.Footer = parallel.Footer
+	panelSetContent(content)
+	panelSetExtraModels(parallel.ExtraModels)
+	if subtitle := probeSubtitle(); subtitle != "2 steps running in parallel" {
+		return fmt.Errorf("native parallel progress subtitle = %q", subtitle)
+	}
+	if err := probeLayout(false); err != "" {
+		return fmt.Errorf("parallel profile switch overview: %s", err)
+	}
 	panelSetPicker(false, "Select a profile", []string{"DeepSeek", strings.Repeat("Long model name ", 8)}, []string{"deepseek", "long"}, nil, "")
 	if err := probeLayout(true); err != "" {
 		return fmt.Errorf("picker: %s", err)

@@ -54,6 +54,7 @@ func (c *Controller) snapshotLocked() Snapshot {
 	out := c.snap
 	if c.snap.ProfileTransition != nil {
 		progress := *c.snap.ProfileTransition
+		progress.ActiveSteps = append([]ProfileStepProgress(nil), progress.ActiveSteps...)
 		out.ProfileTransition = &progress
 	}
 	out.Capabilities = append([]ProfileCapability(nil), c.snap.Capabilities...)

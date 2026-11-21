@@ -851,11 +851,17 @@ func (c *Coordinator) loadLocked(ctx context.Context, cfg Object, requested, for
 	operationCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	c.registerCancel(id, cancel)
-	operationLockErr := c.transition.lock(operationCtx)
-	if operationLockErr != nil {
-		return nil, operationLockErr
+	if !profile {
+		if err := c.transition.lock(operationCtx); err != nil {
+			return nil, err
+		}
+		defer c.transition.unlock()
 	}
-	defer c.transition.unlock()
+	// Profile starts already hold reconfigure, use the per-device scheduler,
+	// and acquired their normal admission leases above. Holding the global
+	// transition gate through readiness would serialize independent devices.
+	// Profile loads refuse unplanned evictions below; all stops and routing
+	// changes remain coordinated by the profile executor.
 	if rt.ready(operationCtx, name, s, nodes) {
 		if override != "" {
 			return c.confirmedSelection(name)

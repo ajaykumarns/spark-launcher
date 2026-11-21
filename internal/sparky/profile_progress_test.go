@@ -131,6 +131,33 @@ func TestProfileProgressStepAndFailureElapsed(t *testing.T) {
 	}
 }
 
+func TestProfileProgressKeepsAllParallelStepsAndTheirTimers(t *testing.T) {
+	c := &Coordinator{}
+	c.beginProfileProgress("parallel", "id")
+	c.profileStepPhase("Start Qwen on spark01", 1, 5)
+	c.profileStepPhase("Start audio on spark02", 3, 5)
+	c.mu.Lock()
+	first := c.profileProgress.active[1]
+	first.started = time.Now().Add(-20 * time.Second)
+	c.profileProgress.active[1] = first
+	c.mu.Unlock()
+	p := c.ProfileProgress("id")
+	active := arr(p["active_steps"])
+	if len(active) != 2 || num(p["step"]) != 0 || num(obj(active[0])["step"]) != 1 || num(obj(active[0])["elapsed_seconds"]) < 20 {
+		t.Fatalf("parallel progress hid or reset an active step: %v", p)
+	}
+	c.profileStepDone(3, nil)
+	p = c.ProfileProgress("id")
+	if len(arr(p["active_steps"])) != 1 || num(p["step"]) != 1 || num(p["step_elapsed_seconds"]) < 20 {
+		t.Fatalf("remaining step lost its timer after the other device finished: %v", p)
+	}
+	c.profileStepDone(1, errors.New("failed"))
+	c.finishProfileProgress(Object{"status": "failed", "error": "failed"}, nil)
+	if p := c.ProfileProgress("id"); len(arr(p["active_steps"])) != 0 || str(p["status"]) != "failed" {
+		t.Fatalf("completed apply kept active steps: %v", p)
+	}
+}
+
 type profileProgressController struct {
 	*fakeController
 	state Object
@@ -202,7 +229,10 @@ func TestCLIProfileProgressBeforeCompletionAndJSONSilence(t *testing.T) {
 				case probed <- struct{}{}:
 				default:
 				}
-				return remoteRunResult{stdout: jsonBytes(Object{"id": requestID, "status": "running", "step": 2, "total": 6, "message": "Start Qwen on spark01", "step_elapsed_seconds": 4})}, nil
+				return remoteRunResult{stdout: jsonBytes(Object{"id": requestID, "status": "running", "active_steps": []any{
+					Object{"step": 2, "total": 6, "message": "Start Qwen on spark01", "elapsed_seconds": 4},
+					Object{"step": 3, "total": 6, "message": "Start audio on spark02", "elapsed_seconds": 7},
+				}})}, nil
 			}
 			return remoteRunResult{}, errors.New("unexpected remote operation")
 		})
@@ -229,7 +259,7 @@ func TestCLIProfileProgressBeforeCompletionAndJSONSilence(t *testing.T) {
 		}
 		writer.Close()
 		output := <-captured
-		if progressEnabled && (!strings.Contains(output, "Applying profile qwen") || !strings.Contains(output, "Step 2/6: Start Qwen") || !strings.Contains(output, "elapsed") || !strings.Contains(output, "step: 4s")) {
+		if progressEnabled && (!strings.Contains(output, "Applying profile qwen") || !strings.Contains(output, "Step 2/6: Start Qwen") || !strings.Contains(output, "Step 3/6: Start audio") || !strings.Contains(output, "elapsed") || !strings.Contains(output, "step: 4s") || !strings.Contains(output, "step: 7s")) {
 			t.Fatalf("missing live progress: %q", output)
 		}
 		if !progressEnabled && (output != "" || id != "") {

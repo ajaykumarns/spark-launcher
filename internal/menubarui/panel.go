@@ -145,6 +145,16 @@ func BuildPanel(s menubar.Snapshot, prefs Prefs, choices []Choice, picking bool,
 			if p.Step > 0 {
 				v.ModelLocation = fmt.Sprintf("Step %d/%d: %s", p.Step, p.Total, v.ModelLocation)
 			}
+			if len(p.ActiveSteps) > 1 {
+				v.ModelLocation = fmt.Sprintf("%d steps running in parallel", len(p.ActiveSteps))
+				for _, step := range p.ActiveSteps {
+					elapsed := step.Elapsed
+					if !p.ObservedAt.IsZero() {
+						elapsed += max(time.Duration(0), time.Since(p.ObservedAt))
+					}
+					v.ExtraModels = append(v.ExtraModels, fmt.Sprintf("Step %d/%d: %s · %s", step.Step, step.Total, firstLine(step.Message), elapsed.Truncate(time.Second)))
+				}
+			}
 			v.Footer = ProfileProgressText(p)
 			v.LoadResult = ""
 			v.LoadEnabled = false

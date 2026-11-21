@@ -532,50 +532,10 @@ func (c *Coordinator) profile(name string, apply bool, expectedPlan, progressID 
 		}
 		return nil
 	}
-	stoppedForStartup := map[string]bool{}
 	steps := arr(result["steps"])
-	for index, v := range steps {
-		step := obj(v)
-		model := str(step["workload"])
-		if boolean(step["only_if_stopped_for_startup"]) && !stoppedForStartup[model] {
-			continue
-		}
-		message := profileStepMessage(step)
-		c.profilePhase(message, index+1, len(steps))
-		if err := checkConfig(); err != nil {
-			return failed(err)
-		}
-		if kind := str(step["service_kind"]); kind != "" {
-			err = c.applyProfileService(ctx, rt, kind, step)
-		} else {
-			modelChanged = true
-			if str(step["action"]) == "stop" {
-				_, err = c.unloadLocked(ctx, cfg, model)
-			} else {
-				err = stopProfilePeersForStartup(step, stoppedForStartup, func() (Object, error) {
-					return rt.snapshot(ctx, true)
-				}, func(peer Object) error {
-					if err := checkConfig(); err != nil {
-						return err
-					}
-					name := str(peer["workload"])
-					c.profilePhase(profileStepMessage(peer)+" to make room for "+model, index+1, len(steps))
-					if _, err := c.unloadLocked(ctx, cfg, name); err != nil {
-						return err
-					}
-					completed = append(completed, profileStep("stop", name, stringsOf(peer["nodes"])))
-					return nil
-				})
-				if err == nil {
-					c.profilePhase(message+"; waiting for readiness", index+1, len(steps))
-					_, err = c.loadLocked(ctx, cfg, model, "", str(step["on"]), c.generationCopy(), true)
-				}
-			}
-		}
-		if err != nil {
-			return failed(err)
-		}
-		completed = append(completed, step)
+	completed, modelChanged, err = c.applyProfileSteps(ctx, cfg, steps, checkConfig)
+	if err != nil {
+		return failed(err)
 	}
 	c.profilePhase("Checking final service readiness", 0, len(steps))
 	if err := checkConfig(); err != nil {

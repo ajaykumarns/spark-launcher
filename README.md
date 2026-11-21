@@ -3,11 +3,14 @@
 Profile changes print a start message immediately. During `sparky profiles apply NAME`,
 the CLI reports the controller's current step and total elapsed time on stderr.
 It reads progress every two seconds and repeats the current step about every
-15 seconds while it waits. Each model start still waits for readiness before the
-next step runs. JSON mode keeps its single final result and has no progress text.
+15 seconds while it waits. Independent starts on different devices run in
+parallel. Steps on the same device wait for readiness in plan order. A start
+that uses both devices waits for both. JSON mode keeps its single final result
+and has no progress text.
 
 The menu bar shows **Switching profile**, the target profile, the current step,
-and elapsed time for changes started from any client. It keeps the last applied
+and elapsed time for changes started from any client. It lists all active steps
+when starts run in parallel. It keeps the last applied
 profile separate from the active switch. Failed or blocked switches show their
 outcome instead of showing the previous profile as ready. The app refreshes
 every 15 seconds while idle and every five seconds during an observed switch.

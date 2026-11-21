@@ -44,6 +44,7 @@ func cliApplyProfile(ctx context.Context, cfg clientConfig, payload Object, prog
 			}
 			message := lastMessage
 			stepTime := ""
+			var parallelLines []string
 			if err != nil {
 				message = "Current step unavailable; still waiting for the apply result"
 				unavailable = true
@@ -55,12 +56,27 @@ func cliApplyProfile(ctx context.Context, cfg clientConfig, payload Object, prog
 				if stepSeconds := num(state["step_elapsed_seconds"]); stepSeconds >= 1 {
 					stepTime = " (step: " + (time.Duration(stepSeconds) * time.Second).String() + ")"
 				}
+				if active := arr(state["active_steps"]); len(active) > 1 {
+					labels := []string{}
+					for _, raw := range active {
+						step := obj(raw)
+						label := fmt.Sprintf("Step %.0f/%.0f: %s", num(step["step"]), num(step["total"]), strings.Join(strings.Fields(str(step["message"])), " "))
+						labels = append(labels, label)
+						parallelLines = append(parallelLines, label+" (step: "+(time.Duration(num(step["elapsed_seconds"]))*time.Second).String()+")")
+					}
+					message = strings.Join(labels, " | ")
+				}
 				unavailable = false
 			} else if unavailable {
 				message = "Waiting for the controller to report this request"
 			}
 			if message != lastMessage || time.Since(lastPrinted) >= cliProgressInterval {
-				fmt.Fprintf(out, "[%s elapsed] %s%s\n", time.Since(started).Truncate(time.Second), message, stepTime)
+				if len(parallelLines) == 0 {
+					parallelLines = []string{message + stepTime}
+				}
+				for _, line := range parallelLines {
+					fmt.Fprintf(out, "[%s elapsed] %s\n", time.Since(started).Truncate(time.Second), line)
+				}
 				lastMessage, lastPrinted = message, time.Now()
 			}
 		}

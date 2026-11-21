@@ -43,7 +43,7 @@ native lifecycle.
 The planner keeps a model when its placement and running recipe match and
 Sparky confirms readiness. It stops loaded models outside the profile.
 A changed model may require a stop and a start. Sparky reads the capability
-groups and their provider lists in file order to start models. Start a model
+groups and their provider lists in file order on each device. Start a model
 with a high memory floor before a model that can share the remaining memory.
 The plan shows which later models Sparky may restart to meet an earlier
 model's startup memory floor. Apply checks memory after the planned stops.
@@ -51,12 +51,28 @@ If memory is still low, Sparky stops only the listed models it needs to
 make room. It starts them again in profile order. Protected models stay
 running.
 
+Apply finishes the planned stops before it starts new workloads. Independent
+model and service starts on different devices then run in parallel. Steps on
+the same device stay in plan order and wait for readiness. A model that uses
+both devices waits for earlier steps on both devices. Later steps on either
+device wait for that model. Each device can advance without waiting for work
+on the other device.
+
+The scheduler also reserves devices used by a conditional peer stop or a
+startup memory check. It reads available memory again after earlier steps
+and conditional stops finish. It enforces configured startup memory floors
+for models and services. The native model supervisor retains its own memory
+and image-job checks. Conditional peer stops keep their gateway update and
+shutdown in sequence. Final route updates run after all starts finish.
+
 Apply makes a fresh plan on the controller. It uses the existing lifecycle
 and request drain rules. New model requests may wait while the controller
 applies changes. A failed switch reports which steps finished and keeps
 the last successfully applied profile name. Review the live state and plan
 again after a failure. Sparky does not automatically restart the prior set
-of models or apply a profile at boot.
+of models or apply a profile at boot. After a start fails, Sparky schedules no
+new starts. It waits for starts already in progress to finish and includes
+their completed steps in the failure result.
 
 List a provider to start it or keep it running. Omit it to stop it.
 Use `capabilities: {}` to stop all profile workloads. Profiles
@@ -79,3 +95,8 @@ Bifrost routing policy. Existing route reconciliation uses live model
 readiness. `sparky status` reports the last applied profile and actual running
 state. Plans show which requested capabilities are available now. Apply
 reports availability after it verifies the selected providers.
+
+During apply, the CLI and menu bar show every active step and its elapsed
+time. JSON status includes these steps in `profile_transition.active_steps`.
+The saved profile remains the last successful selection until the new profile
+passes its final checks.

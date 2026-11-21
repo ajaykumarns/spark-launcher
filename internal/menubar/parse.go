@@ -259,6 +259,19 @@ func parseProfileTransition(row object) *ProfileTransition {
 	if n, ok := countValue(row["step_elapsed_seconds"]); ok && *n <= int((1<<63-1)/int64(time.Second)) {
 		p.StepElapsed = time.Duration(*n) * time.Second
 	}
+	for _, raw := range arr(row["active_steps"]) {
+		row := obj(raw)
+		step, stepOK := countValue(row["step"])
+		total, totalOK := countValue(row["total"])
+		if !stepOK || !totalOK || *step < 1 || *step > *total || str(row["message"]) == "" {
+			continue
+		}
+		active := ProfileStepProgress{Message: str(row["message"]), Step: *step, Total: *total}
+		if n, ok := countValue(row["elapsed_seconds"]); ok && *n <= int((1<<63-1)/int64(time.Second)) {
+			active.Elapsed = time.Duration(*n) * time.Second
+		}
+		p.ActiveSteps = append(p.ActiveSteps, active)
+	}
 	return p
 }
 

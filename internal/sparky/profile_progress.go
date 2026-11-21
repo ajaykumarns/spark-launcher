@@ -2,6 +2,7 @@ package sparky
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -12,6 +13,13 @@ type profileProgress struct {
 	id, name, status, message, problem string
 	step, total                        int
 	started, stepStarted, finished     time.Time
+	active                             map[int]profileStepProgress
+}
+
+type profileStepProgress struct {
+	message string
+	total   int
+	started time.Time
 }
 
 func (c *Coordinator) beginProfileProgress(name, id string) {
@@ -30,6 +38,36 @@ func (c *Coordinator) profilePhase(message string, step, total int) {
 	defer c.mu.Unlock()
 	if p := c.profileProgress; p != nil {
 		p.message, p.step, p.total, p.stepStarted = message, step, total, time.Now()
+		p.active = nil
+	}
+}
+
+func (c *Coordinator) profileStepPhase(message string, step, total int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p := c.profileProgress
+	if p == nil {
+		return
+	}
+	if p.active == nil {
+		p.active = map[int]profileStepProgress{}
+	}
+	current, exists := p.active[step]
+	if !exists || current.message != message {
+		current = profileStepProgress{message, total, time.Now()}
+		p.active[step] = current
+	}
+	p.message, p.step, p.total, p.stepStarted = message, step, total, current.started
+}
+
+func (c *Coordinator) profileStepDone(step int, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if p := c.profileProgress; p != nil {
+		delete(p.active, step)
+		if err != nil {
+			p.problem = err.Error()
+		}
 	}
 }
 
@@ -41,6 +79,7 @@ func (c *Coordinator) finishProfileProgress(result Object, err error) {
 		return
 	}
 	p.finished = time.Now()
+	p.active = nil
 	p.status, p.problem = str(result["status"]), str(result["error"])
 	if boolean(result["blocked"]) {
 		p.status, p.problem = "blocked", strings.Join(stringsOf(result["blockers"]), " ")
@@ -66,10 +105,31 @@ func (c *Coordinator) ProfileProgress(id string) Object {
 	if end.IsZero() {
 		end = time.Now()
 	}
-	return Object{"id": p.id, "profile": p.name, "status": p.status,
+	result := Object{"id": p.id, "profile": p.name, "status": p.status,
 		"message": p.message, "step": p.step, "total": p.total, "error": p.problem,
 		"started_at": p.started.UTC(), "elapsed_seconds": max(0, int64(end.Sub(p.started)/time.Second)),
 		"step_elapsed_seconds": max(0, int64(end.Sub(p.stepStarted)/time.Second))}
+	indices := make([]int, 0, len(p.active))
+	for index := range p.active {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	active := []any{}
+	for _, index := range indices {
+		step := p.active[index]
+		active = append(active, Object{"step": index, "total": step.total, "message": step.message,
+			"elapsed_seconds": max(0, int64(end.Sub(step.started)/time.Second))})
+	}
+	result["active_steps"] = active
+	if len(active) == 1 {
+		step := obj(active[0])
+		result["step"], result["total"], result["message"] = step["step"], step["total"], step["message"]
+		result["step_elapsed_seconds"] = step["elapsed_seconds"]
+	} else if len(active) > 1 {
+		result["step"], result["step_elapsed_seconds"] = 0, 0
+		result["message"] = fmt.Sprintf("%d steps running in parallel", len(active))
+	}
+	return result
 }
 
 func profileStepMessage(step Object) string {

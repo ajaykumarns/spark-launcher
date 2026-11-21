@@ -54,6 +54,23 @@ func TestProfileElapsedTimeAdvancesOnlyWhileRunning(t *testing.T) {
 	}
 }
 
+func TestPanelListsParallelProfileStarts(t *testing.T) {
+	s := Snapshot{UpdatedAt: time.Now(), ProfileName: "old", ProfileTransition: &menubar.ProfileTransition{
+		Name: "new", Status: "running", Elapsed: time.Minute,
+		ActiveSteps: []menubar.ProfileStepProgress{
+			{Message: "Start Qwen on spark01", Step: 2, Total: 7, Elapsed: 20 * time.Second},
+			{Message: "Start audio on spark02", Step: 4, Total: 7, Elapsed: 3 * time.Second},
+		},
+	}}
+	v := BuildPanel(s, Prefs{}, nil, false, true)
+	if v.HeaderState != "Switching profile" || v.LoadEnabled || len(v.ExtraModels) != 2 ||
+		!strings.Contains(v.ModelLocation, "2 steps running in parallel") ||
+		!strings.Contains(v.ExtraModels[0], "Step 2/7: Start Qwen on spark01") || !strings.Contains(v.ExtraModels[0], "20s") ||
+		!strings.Contains(v.ExtraModels[1], "Step 4/7: Start audio on spark02") || !strings.Contains(v.ExtraModels[1], "3s") {
+		t.Fatalf("parallel starts were not visible: %+v", v)
+	}
+}
+
 func TestPollerRefreshesObservedProfileSwitchMoreOften(t *testing.T) {
 	f := &fakeCtrl{snap: Snapshot{ProfileTransition: &menubar.ProfileTransition{Status: "running"}}}
 	p := NewPoller(f, 15*time.Second, time.Second)

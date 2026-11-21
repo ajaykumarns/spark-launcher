@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -273,14 +274,20 @@ func TestProfileSwitchesComfyAndOCR(t *testing.T) {
 	ocrSetHealth(t, Object{"service": "spark-ocr"}, nil)
 	var ocrRunning, comfyRunning, imageBusy bool
 	var changes []string
+	var changesMu sync.Mutex
+	recordChange := func(change string) {
+		changesMu.Lock()
+		defer changesMu.Unlock()
+		changes = append(changes, change)
+	}
 	ocrSetStub(t, func(args []string) (CommandResult, error) {
 		switch {
 		case len(args) > 5 && args[4] == "docker" && args[5] == "compose":
 			ocrRunning = true
-			changes = append(changes, "start OCR")
+			recordChange("start OCR")
 		case len(args) > 3 && args[2] == "docker" && args[3] == "stop":
 			ocrRunning = false
-			changes = append(changes, "stop OCR")
+			recordChange("stop OCR")
 		case len(args) > 3 && args[2] == "docker" && args[3] == "inspect":
 			if ocrRunning {
 				return CommandResult{Out: ocrInspectOK}, nil
@@ -310,10 +317,10 @@ func TestProfileSwitchesComfyAndOCR(t *testing.T) {
 		switch cmd {
 		case shellJoin([]string{"sudo", "-n", "systemctl", "start", "comfyui.service"}):
 			comfyRunning = true
-			changes = append(changes, "start ComfyUI")
+			recordChange("start ComfyUI")
 		case shellJoin([]string{"sudo", "-n", "systemctl", "stop", "comfyui.service"}):
 			comfyRunning = false
-			changes = append(changes, "stop ComfyUI")
+			recordChange("stop ComfyUI")
 		default:
 			if !strings.Contains(cmd, "node probe") {
 				return run(ctx, args, input)
@@ -366,7 +373,9 @@ profiles:
 	if _, err := env.coord.SubmitComfy(Object{"prompt": Object{}}, ""); err == nil || !strings.Contains(err.Error(), "does not include ComfyUI") {
 		t.Fatalf("an image request must not start an omitted service: %v", err)
 	}
-	if want := []string{"start ComfyUI", "start OCR", "stop ComfyUI", "stop OCR"}; !slices.Equal(changes, want) {
+	starts := slices.Clone(changes[:2])
+	slices.Sort(starts)
+	if !slices.Equal(starts, []string{"start ComfyUI", "start OCR"}) || !slices.Equal(changes[2:], []string{"stop ComfyUI", "stop OCR"}) {
 		t.Fatalf("unexpected service changes: %v", changes)
 	}
 }

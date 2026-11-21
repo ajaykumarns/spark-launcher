@@ -56,6 +56,13 @@ type ProfileTransition struct {
 	Step, Total                  int
 	Elapsed, StepElapsed         time.Duration
 	ObservedAt                   time.Time
+	ActiveSteps                  []ProfileStepProgress
+}
+
+type ProfileStepProgress struct {
+	Message     string
+	Step, Total int
+	Elapsed     time.Duration
 }
 
 func (s Snapshot) SwitchingProfile() bool {
