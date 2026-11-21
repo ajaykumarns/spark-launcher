@@ -296,6 +296,21 @@ sparky --help
 `dist/` is build output and never committed. Builds use reproducible flags
 (`-trimpath`, `-buildvcs=false`) and touch no network, services, or models.
 
+## Pre-push gate
+
+The repository carries a versioned `.githooks/pre-push` hook — gofmt
+(`make fmt-check`) and `go vet`, nothing expensive — installed once per
+clone with:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+It runs before the push and aborts with a clear message when the tree is not
+clean, so a formatting or vet failure never reaches `main` in the first
+place (CI only runs after the push lands). It skips the tests and race
+detector on purpose; those stay in CI.
+
 Install the compiled `sparky` binary with the standalone installer:
 
 ```sh

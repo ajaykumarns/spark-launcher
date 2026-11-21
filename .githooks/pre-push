@@ -1,0 +1,26 @@
+#!/bin/sh
+# Pre-push gate: catch formatting and vet failures before they land on
+# main (CI only runs after the push). Cheap: gofmt + go vet, no tests.
+# Tests/race stay in CI; this gate exists so a broken commit never reaches
+# main in the first place.
+set -eu
+
+section() {
+    printf '\n== %s ==\n' "$1"
+}
+
+section "gofmt"
+if ! make fmt-check; then
+    echo "" >&2
+    echo "pre-push abort: these files are not gofmt-clean. Fix them with: make fmt" >&2
+    exit 1
+fi
+
+section "go vet"
+if ! make vet; then
+    echo "" >&2
+    echo "pre-push abort: go vet failed." >&2
+    exit 1
+fi
+
+section "pre-push passed (fmt-check + vet)"

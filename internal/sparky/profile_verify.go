@@ -63,7 +63,7 @@ func profileOCRSmoke(ctx context.Context, cfg clientConfig) Object {
 	payload := Object{
 		"model": profileSmokeModel,
 		"document": Object{
-			"type":     "image_url",
+			"type":      "image_url",
 			"image_url": "data:image/png;base64," + base64.StdEncoding.EncodeToString(profileSmokeImage()),
 		},
 	}

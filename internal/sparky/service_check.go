@@ -151,10 +151,10 @@ func sshServiceCommand(ctx context.Context, host, command string) (string, error
 // gateway host. No headers, tokens, tools, or private fields are ever
 // returned.
 type mcpClientReport struct {
-	Name         string `json:"name"`
-	State        string `json:"state"`
-	Disabled     bool   `json:"disabled"`
-	Connection   string `json:"connection_string"`
+	Name       string `json:"name"`
+	State      string `json:"state"`
+	Disabled   bool   `json:"disabled"`
+	Connection string `json:"connection_string"`
 }
 
 // mcpCheckScript is the pinned python one-liner run over SSH on the gateway
