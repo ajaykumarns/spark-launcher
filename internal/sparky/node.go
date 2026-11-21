@@ -427,7 +427,7 @@ func NodeMain(args []string, in io.Reader) (any, error) {
 		}
 		operation := positional[0]
 		switch operation {
-		case "plan", "config", "placement", "run", "validate", "image-profile", "profile-list", "profile-plan", "profile-apply":
+		case "plan", "config", "placement", "run", "validate", "image-profile", "profile-list", "profile-plan", "profile-apply", "profile-progress":
 		default:
 			return nil, usagef("Unknown rpc operation: %s.", operation)
 		}

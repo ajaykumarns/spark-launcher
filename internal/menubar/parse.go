@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // object is the decoded JSON shape. Numbers are kept as json.Number so a
@@ -237,7 +238,28 @@ func parseStatus(data object) (Snapshot, error) {
 	}
 
 	profile := obj(data["profile"])
-	return Snapshot{Models: models, Devices: devices, ProfileName: str(profile["name"]), ProfileDescription: str(profile["description"]), Capabilities: profileCapabilities(profile)}, nil
+	return Snapshot{Models: models, Devices: devices, ProfileName: str(profile["name"]), ProfileDescription: str(profile["description"]), Capabilities: profileCapabilities(profile), ProfileTransition: parseProfileTransition(obj(data["profile_transition"]))}, nil
+}
+
+func parseProfileTransition(row object) *ProfileTransition {
+	name, status := str(row["profile"]), str(row["status"])
+	if name == "" || (status != "running" && status != "applied" && status != "failed" && status != "blocked") {
+		return nil
+	}
+	p := &ProfileTransition{Name: name, Status: status, Message: str(row["message"]), Error: str(row["error"])}
+	if n, ok := countValue(row["step"]); ok {
+		p.Step = *n
+	}
+	if n, ok := countValue(row["total"]); ok {
+		p.Total = *n
+	}
+	if n, ok := countValue(row["elapsed_seconds"]); ok && *n <= int((1<<63-1)/int64(time.Second)) {
+		p.Elapsed = time.Duration(*n) * time.Second
+	}
+	if n, ok := countValue(row["step_elapsed_seconds"]); ok && *n <= int((1<<63-1)/int64(time.Second)) {
+		p.StepElapsed = time.Duration(*n) * time.Second
+	}
+	return p
 }
 
 func sortedKeys(m object) []string {

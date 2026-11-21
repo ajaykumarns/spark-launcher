@@ -344,9 +344,12 @@ func TestMainRemoteCommandsThroughFakeRunner(t *testing.T) {
 		{"profiles", "list"},
 		{"profile", "plan", "daily"},
 		{"profile", "apply", "daily", "--expect-plan", "example"},
+		{"profiles", "apply", "daily", "--expect-plan", "example", "--json"},
 	} {
 		code, out, errout := runMain(args, "")
-		if code != 0 || !strings.Contains(out, "daily") || !strings.Contains(out, "Daily chat") || errout != "" {
+		wantProgress := contains(args, "apply") && !contains(args, "--json")
+		if code != 0 || !strings.Contains(out, "daily") || !strings.Contains(out, "Daily chat") ||
+			(wantProgress && !strings.Contains(errout, "Applying profile daily")) || (!wantProgress && errout != "") {
 			t.Fatalf("%v: code=%d stdout=%q stderr=%q", args, code, out, errout)
 		}
 	}

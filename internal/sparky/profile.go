@@ -430,6 +430,18 @@ func stopProfilePeersForStartup(step Object, stopped map[string]bool, snapshot f
 }
 
 func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Object, error) {
+	planID := ""
+	if len(expected) > 0 {
+		planID = expected[0]
+	}
+	return c.profile(name, apply, planID, "")
+}
+
+func (c *Coordinator) ApplyProfile(name, expectedPlan, progressID string) (Object, error) {
+	return c.profile(name, true, expectedPlan, progressID)
+}
+
+func (c *Coordinator) profile(name string, apply bool, expectedPlan, progressID string) (result Object, err error) {
 	budget := 60 * time.Second
 	if apply {
 		budget = 2 * time.Hour
@@ -438,6 +450,8 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 			return nil, fail("A forced model operation is in progress.")
 		}
 		defer c.forceMu.Unlock()
+		c.beginProfileProgress(name, progressID)
+		defer func() { c.finishProfileProgress(result, err) }()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
@@ -445,6 +459,9 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 		return nil, err
 	}
 	defer c.reconfigure.unlock()
+	if apply {
+		c.profilePhase("Checking profile and current services", 0, 0)
+	}
 	if err := c.refresh(); err != nil {
 		return nil, err
 	}
@@ -473,7 +490,7 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 			return rt.nativeReady(ctx, m.name, m.model, m.recipe, m.nodes, m.placement)
 		}), nil
 	}
-	result, err := preview()
+	result, err = preview()
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +500,7 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 	if !apply || boolean(result["blocked"]) {
 		return result, nil
 	}
-	if len(expected) > 0 && expected[0] != "" && expected[0] != str(result["plan_id"]) {
+	if expectedPlan != "" && expectedPlan != str(result["plan_id"]) {
 		return nil, fail("The profile plan changed. Preview the new plan before applying it.")
 	}
 	if c.Fenced() {
@@ -516,12 +533,15 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 		return nil
 	}
 	stoppedForStartup := map[string]bool{}
-	for _, v := range arr(result["steps"]) {
+	steps := arr(result["steps"])
+	for index, v := range steps {
 		step := obj(v)
 		model := str(step["workload"])
 		if boolean(step["only_if_stopped_for_startup"]) && !stoppedForStartup[model] {
 			continue
 		}
+		message := profileStepMessage(step)
+		c.profilePhase(message, index+1, len(steps))
 		if err := checkConfig(); err != nil {
 			return failed(err)
 		}
@@ -539,6 +559,7 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 						return err
 					}
 					name := str(peer["workload"])
+					c.profilePhase(profileStepMessage(peer)+" to make room for "+model, index+1, len(steps))
 					if _, err := c.unloadLocked(ctx, cfg, name); err != nil {
 						return err
 					}
@@ -546,6 +567,7 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 					return nil
 				})
 				if err == nil {
+					c.profilePhase(message+"; waiting for readiness", index+1, len(steps))
 					_, err = c.loadLocked(ctx, cfg, model, "", str(step["on"]), c.generationCopy(), true)
 				}
 			}
@@ -555,6 +577,7 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 		}
 		completed = append(completed, step)
 	}
+	c.profilePhase("Checking final service readiness", 0, len(steps))
 	if err := checkConfig(); err != nil {
 		return failed(err)
 	}
@@ -566,6 +589,7 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 		return failed(fail("The running state still differs from the profile. Review a new plan."))
 	}
 	if modelChanged {
+		c.profilePhase("Updating gateway routes", 0, len(steps))
 		if err := c.syncAutoRoutesLocked(ctx, nil); err != nil {
 			return failed(err)
 		}
@@ -573,6 +597,7 @@ func (c *Coordinator) Profile(name string, apply bool, expected ...string) (Obje
 	if err := checkConfig(); err != nil {
 		return failed(err)
 	}
+	c.profilePhase("Saving selected profile", 0, len(steps))
 	state := Object{"name": name, "applied_at": time.Now().UTC(), "capabilities": p.capabilities}
 	if p.description != "" {
 		state["description"] = p.description

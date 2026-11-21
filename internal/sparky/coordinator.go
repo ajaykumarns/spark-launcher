@@ -51,6 +51,7 @@ type Coordinator struct {
 	imageGate               chan struct{}
 	autoPool                Object
 	decisionAutoPool        Object
+	profileProgress         *profileProgress
 }
 
 func newCoordinator(path string, rt *Runtime) (*Coordinator, error) {
@@ -447,6 +448,9 @@ func (c *Coordinator) snapshot(ctx context.Context, fresh bool) (Object, error) 
 		}
 	}
 	data["admission"] = c.admission()
+	if progress := c.ProfileProgress(""); str(progress["status"]) != "pending" {
+		data["profile_transition"] = progress
+	}
 	if bifrostAuto(c.cfg()) {
 		c.mu.Lock()
 		data["auto_routing"] = copyObject(c.autoPool)

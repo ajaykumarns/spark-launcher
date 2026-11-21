@@ -38,6 +38,7 @@ type Choice struct {
 type Snapshot struct {
 	ProfileName        string
 	ProfileDescription string
+	ProfileTransition  *ProfileTransition
 	Capabilities       []ProfileCapability
 	Models             []ModelStatus
 	Devices            []DeviceStatus
@@ -46,4 +47,17 @@ type Snapshot struct {
 	Loading            bool
 	LoadError          string
 	LoadMessage        string
+}
+
+// ProfileTransition describes an apply started by any client, including a CLI
+// outside the menu app. Elapsed values come from the controller's clock.
+type ProfileTransition struct {
+	Name, Status, Message, Error string
+	Step, Total                  int
+	Elapsed, StepElapsed         time.Duration
+	ObservedAt                   time.Time
+}
+
+func (s Snapshot) SwitchingProfile() bool {
+	return s.ProfileTransition != nil && s.ProfileTransition.Status == "running"
 }

@@ -439,7 +439,7 @@ var controlReads = map[string]bool{"/control/status": true, "/control/config": t
 	"/control/fence": true}
 var controlWrites = map[string]bool{"/control/fence": true, "/control/plan": true, "/control/load": true,
 	"/control/unload": true, "/control/run": true, "/control/placement": true,
-	"/control/profile-plan": true, "/control/profile-apply": true}
+	"/control/profile-plan": true, "/control/profile-apply": true, "/control/profile-progress": true}
 
 func (s *controllerServer) serveControl(w http.ResponseWriter, r *http.Request, path string) {
 	// Administrator controls are loopback-only via SSH tunnels; the peer IP
@@ -505,6 +505,13 @@ func (s *controllerServer) serveControl(w http.ResponseWriter, r *http.Request, 
 		s.respond(w, http.StatusOK, Object{"path": s.ctrl.ConfigPath(), "config": config})
 	case "/control/leases":
 		s.respond(w, http.StatusOK, s.ctrl.Admission())
+	case "/control/profile-progress":
+		controller, ok := s.ctrl.(interface{ ProfileProgress(string) Object })
+		if !ok {
+			s.failRequest(w, http.StatusNotImplemented, "Profile progress is not available. Update the controller.")
+			return
+		}
+		s.respond(w, http.StatusOK, controller.ProfileProgress(str(body["id"])))
 	case "/control/profile-plan", "/control/profile-apply":
 		controller, ok := s.ctrl.(interface {
 			Profile(name string, apply bool, expected ...string) (Object, error)
@@ -513,7 +520,15 @@ func (s *controllerServer) serveControl(w http.ResponseWriter, r *http.Request, 
 			s.failRequest(w, http.StatusNotImplemented, "Cluster profiles are not available.")
 			return
 		}
-		result, err := controller.Profile(str(body["name"]), path == "/control/profile-apply", str(body["expected_plan"]))
+		var result Object
+		var err error
+		if apply, ok := s.ctrl.(interface {
+			ApplyProfile(string, string, string) (Object, error)
+		}); ok && path == "/control/profile-apply" {
+			result, err = apply.ApplyProfile(str(body["name"]), str(body["expected_plan"]), str(body["progress_id"]))
+		} else {
+			result, err = controller.Profile(str(body["name"]), path == "/control/profile-apply", str(body["expected_plan"]))
+		}
 		if err != nil {
 			s.failRequest(w, http.StatusConflict, err.Error())
 			return

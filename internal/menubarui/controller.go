@@ -47,7 +47,7 @@ func LoadedModels(s Snapshot) []menubar.ModelStatus {
 }
 
 // AnyLoading reports whether a load is in progress according to the backend.
-func AnyLoading(s Snapshot) bool { return s.Loading }
+func AnyLoading(s Snapshot) bool { return s.Loading || s.SwitchingProfile() }
 
 // StateLabel maps backend state strings to short user-facing words.
 func StateLabel(m menubar.ModelStatus, snap Snapshot) string {

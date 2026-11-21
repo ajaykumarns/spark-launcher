@@ -76,7 +76,7 @@ func main() {
 	}
 	if cli != "" {
 		app.ctrl = menubarui.NewController(cli)
-		app.poller = menubarui.NewPoller(app.ctrl, 60*time.Second, 30*time.Second)
+		app.poller = menubarui.NewPoller(app.ctrl, 15*time.Second, 30*time.Second)
 	}
 	runApp(app)
 }

@@ -131,6 +131,31 @@ func BuildPanel(s menubar.Snapshot, prefs Prefs, choices []Choice, picking bool,
 
 	v.Footer = footerLine(s)
 	v.LoadResult = LoadResultLine(s)
+	if p := s.ProfileTransition; p != nil && p.Status != "applied" {
+		v.ModelCaption = "Profile switch"
+		v.ExtraModels = nil
+		switch {
+		case !connected:
+			v.ModelName = "Last switch: " + p.Name
+			v.ModelLocation = "Current profile state is unavailable"
+		case p.Status == "running":
+			v.HeaderState = "Switching profile"
+			v.ModelName = "Switching to: " + p.Name
+			v.ModelLocation = firstLine(p.Message)
+			if p.Step > 0 {
+				v.ModelLocation = fmt.Sprintf("Step %d/%d: %s", p.Step, p.Total, v.ModelLocation)
+			}
+			v.Footer = ProfileProgressText(p)
+			v.LoadResult = ""
+			v.LoadEnabled = false
+		case p.Status == "failed" || p.Status == "blocked":
+			v.HeaderState = "Profile switch " + p.Status
+			v.ModelName = "Target profile: " + p.Name
+			v.ModelLocation = "Last applied profile: " + s.ProfileName
+			v.LoadResult = firstLine(p.Error)
+			v.Footer = ProfileProgressText(p)
+		}
+	}
 
 	for _, c := range CatalogChoices(choices) {
 		v.Choices = append(v.Choices, ChoiceDisplayName(c))
@@ -265,6 +290,9 @@ func modelPriority(m menubar.ModelStatus, s menubar.Snapshot) int {
 // panelTransitioning reports whether any loaded LLM is in an observed
 // controller transition, either starting/loading or stopping/draining.
 func panelTransitioning(s menubar.Snapshot) bool {
+	if s.SwitchingProfile() {
+		return true
+	}
 	for _, m := range LoadedModels(s) {
 		p := modelPriority(m, s)
 		if p == priorityStarting || p == priorityStopping {

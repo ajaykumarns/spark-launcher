@@ -334,7 +334,13 @@ func cliDispatch(ctx context.Context, cfg clientConfig, inv *cliInvocation, in i
 		if inv.Flags["expect-plan"] {
 			payload["expected_plan"] = inv.Values["expect-plan"]
 		}
-		data, err := cliRemoteRPC(ctx, cfg, "profile-"+action, payload)
+		var data Object
+		var err error
+		if action == "apply" {
+			data, err = cliApplyProfile(ctx, cfg, payload, !inv.JSON, errout)
+		} else {
+			data, err = cliRemoteRPC(ctx, cfg, "profile-"+action, payload)
+		}
 		if err != nil {
 			return cliErrorExit(inv, cliInterruptErr(ctx, err), out, errout)
 		}

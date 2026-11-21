@@ -154,6 +154,9 @@ func (p *Poller) nextDelay() time.Duration {
 	f := p.failures
 	p.mu.Unlock()
 	if f <= 0 {
+		if s := p.ctrl.Snapshot(); s.SwitchingProfile() || s.Loading {
+			return min(p.interval, 5*time.Second)
+		}
 		return p.interval
 	}
 	back := p.interval << uint(minInt(f, 8))

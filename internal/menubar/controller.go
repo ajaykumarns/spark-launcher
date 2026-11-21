@@ -52,6 +52,10 @@ func (c *Controller) Snapshot() Snapshot {
 
 func (c *Controller) snapshotLocked() Snapshot {
 	out := c.snap
+	if c.snap.ProfileTransition != nil {
+		progress := *c.snap.ProfileTransition
+		out.ProfileTransition = &progress
+	}
 	out.Capabilities = append([]ProfileCapability(nil), c.snap.Capabilities...)
 	out.Models = make([]ModelStatus, len(c.snap.Models))
 	for i, m := range c.snap.Models {
@@ -111,10 +115,14 @@ func (c *Controller) Refresh(ctx context.Context) error {
 	c.mu.Lock()
 	c.snap.ProfileName = parsed.ProfileName
 	c.snap.ProfileDescription = parsed.ProfileDescription
+	c.snap.ProfileTransition = parsed.ProfileTransition
 	c.snap.Capabilities = parsed.Capabilities
 	c.snap.Models = parsed.Models
 	c.snap.Devices = parsed.Devices
 	c.snap.UpdatedAt = c.now()
+	if c.snap.ProfileTransition != nil {
+		c.snap.ProfileTransition.ObservedAt = c.snap.UpdatedAt
+	}
 	c.snap.Error = ""
 	c.mu.Unlock()
 	return nil

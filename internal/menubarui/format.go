@@ -191,6 +191,15 @@ func IconTitle(s menubar.Snapshot, showTitle bool) string {
 	if s.Error != "" {
 		return "!"
 	}
+	if s.SwitchingProfile() {
+		if showTitle {
+			return "Switching: " + s.ProfileTransition.Name
+		}
+		return "…"
+	}
+	if p := s.ProfileTransition; p != nil && (p.Status == "failed" || p.Status == "blocked") {
+		return "!"
+	}
 	if !showTitle {
 		return ""
 	}

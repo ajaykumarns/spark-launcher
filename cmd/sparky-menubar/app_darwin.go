@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"sparky/internal/menubar"
 	"sparky/internal/menubarui"
 )
 
@@ -147,6 +148,10 @@ func (a *menuApp) renderLocked() {
 		// Always show its elapsed time, together with a concise message naming
 		// the target model; never invent stages or percentages.
 		snap.LoadMessage = fmt.Sprintf("Profile %s · %s", profile, a.load.Elapsed().Round(time.Second))
+		if !snap.SwitchingProfile() || snap.ProfileTransition.Name != profile {
+			snap.ProfileTransition = &menubar.ProfileTransition{Name: profile, Status: "running",
+				Message: "Waiting for profile apply", Elapsed: a.load.Elapsed(), ObservedAt: time.Now()}
+		}
 	} else if snap.Loading && snap.LoadMessage == "" {
 		snap.LoadMessage = "Loading a model…"
 	}
@@ -160,9 +165,10 @@ func (a *menuApp) renderLocked() {
 		}
 	}
 	v := menubarui.BuildPanel(snap, a.prefs, nil, a.picking, a.ctrl != nil)
-	if running {
+	if running && snap.Error == "" {
 		v.HeaderState = "Switching profile"
-	} else {
+	} else if !snap.SwitchingProfile() && v.LoadResult == "" &&
+		(snap.ProfileTransition == nil || snap.ProfileTransition.Name == profile) {
 		v.LoadResult = a.profileResult
 	}
 	v.PickerCaption = a.pickerCaption()
@@ -202,9 +208,9 @@ func (a *menuApp) renderLocked() {
 	panelSetSettings(v.ShowTitle, menubarui.LoginEnabled())
 
 	iconState := 0
-	if snap.Loading {
+	if snap.Loading || (snap.SwitchingProfile() && snap.Error == "") {
 		iconState = 1
-	} else if snap.Error != "" || a.ctrl == nil {
+	} else if snap.Error != "" || a.ctrl == nil || (snap.ProfileTransition != nil && (snap.ProfileTransition.Status == "failed" || snap.ProfileTransition.Status == "blocked")) {
 		iconState = 2
 	}
 	panelSetIcon(iconState, menubarui.IconTitle(snap, a.prefs.ShowTitle))

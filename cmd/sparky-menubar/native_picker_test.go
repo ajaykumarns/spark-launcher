@@ -8,6 +8,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"sparky/internal/menubar"
+	"sparky/internal/menubarui"
 )
 
 // AppKit view objects must be built on the process main OS thread, exactly like
@@ -124,6 +128,18 @@ func nativeLayoutCase() error {
 	}
 	if err := probeLayout(false); err != "" {
 		return fmt.Errorf("overview: %s", err)
+	}
+	switching := menubarui.BuildPanel(menubar.Snapshot{ProfileName: "glm-5.3", UpdatedAt: time.Now(),
+		ProfileTransition: &menubar.ProfileTransition{Name: "qwen-next-flash", Status: "running",
+			Message: "Start Qwen on spark01", Step: 3, Total: 8, Elapsed: time.Minute}}, menubarui.Prefs{}, nil, false, true)
+	content.HeaderState, content.ModelCaption = switching.HeaderState, switching.ModelCaption
+	content.ModelName, content.ModelLocation, content.Footer = switching.ModelName, switching.ModelLocation, switching.Footer
+	panelSetContent(content)
+	if subtitle := probeSubtitle(); subtitle != "Step 3/8: Start Qwen on spark01" {
+		return fmt.Errorf("native profile progress subtitle = %q", subtitle)
+	}
+	if err := probeLayout(false); err != "" {
+		return fmt.Errorf("profile switch overview: %s", err)
 	}
 	panelSetPicker(false, "Select a profile", []string{"DeepSeek", strings.Repeat("Long model name ", 8)}, []string{"deepseek", "long"}, nil, "")
 	if err := probeLayout(true); err != "" {

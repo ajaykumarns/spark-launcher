@@ -3,7 +3,23 @@ package menubarui
 import (
 	"strings"
 	"time"
+
+	"sparky/internal/menubar"
 )
+
+func ProfileProgressText(p *menubar.ProfileTransition) string {
+	elapsed, stepElapsed := p.Elapsed, p.StepElapsed
+	if p.Status == "running" && !p.ObservedAt.IsZero() {
+		age := max(time.Duration(0), time.Since(p.ObservedAt))
+		elapsed += age
+		stepElapsed += age
+	}
+	text := "Elapsed: " + elapsed.Truncate(time.Second).String()
+	if p.Step > 0 {
+		text += " · step: " + stepElapsed.Truncate(time.Second).String()
+	}
+	return text
+}
 
 // PickerCaptionText picks the short line above the model chooser. It always
 // shows an explicit loading, empty, or error state instead of a blank list, and
