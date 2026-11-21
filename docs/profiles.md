@@ -140,7 +140,10 @@ base-URL-only pattern the installation uses) on the gateway host, then re-run
 OCR route through the gateway. It is silent on success (so a cron delivers
 nothing) and prints the failure details and exits nonzero on failure (so a
 cron can deliver an alert). It never touches harnesses, services, or SSH —
-`sparky doctor` does the full check.
+`sparky doctor` does the full check. The scheduled job is the Mac-local
+hermes cron job `route-canary` (no-agent, hourly, failure-deliver
+`telegram:8101940290`); the sparky CLI lives on the Mac and the two Spark
+devices — not on openclaw, which reaches the gateway only for API access.
 
 During apply, the CLI and menu bar show every active step and its elapsed
 time. JSON status includes these steps in `profile_transition.active_steps`.
