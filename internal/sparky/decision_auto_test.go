@@ -106,7 +106,7 @@ func TestDecisionAutoGatewayKeepsChatRuleAndUsesReadyDecisionProvider(t *testing
 		t.Fatal(err)
 	}
 	rule := fake.named("sparky-decision-auto")
-	if str(rule["cel_expression"]) != "provider == 'spark-decision' && model == 'auto'" {
+	if str(rule["cel_expression"]) != "request_type == 'decisions' && model == 'spark-decision/auto'" {
 		t.Fatal(rule)
 	}
 	if num(rule["priority"]) == num(chat["priority"]) {
