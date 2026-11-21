@@ -80,7 +80,7 @@ var cliHarnessCommands = []string{"claude", "hermes", "codex", "opencode"}
 // cliCommandList is every top-level command word.
 var cliCommandList = append([]string{
 	"status", "models", "devices", "ocr", "plan", "load", "unload",
-	"profile", "image-profile", "config", "run", "sync", "logs", "doctor", "ui",
+	"profile", "image-profile", "config", "run", "sync", "logs", "doctor", "canary", "ui",
 	"update", "init", "admin", "node",
 }, cliHarnessCommands...)
 
@@ -159,6 +159,7 @@ var cliSpecs = map[string]*cliSpec{
 	// device transaction, not to the command line.
 	"update": {posMax: 0, strFlags: []string{"--tag"}, boolFlags: []string{"--check"}},
 	"doctor": {posMax: 1, posNames: []string{"harness"}, posChoices: map[int][]string{0: cliHarnessCommands}},
+	"canary": {posMax: 0},
 	"ui":     {posMax: 0},
 	"init": {posMax: 0,
 		strFlags: []string{"--gateway", "--prefix", "--admin-host", "--worker-host", "--remote-root", "--admin-url"},
@@ -197,7 +198,10 @@ Commands:
   run comfyui FILE Submit a ComfyUI API workflow JSON file
   sync             Refresh the Hermes Spark provider from the live model list
   logs             Recent local harness launches (--limit N)
-  doctor [HARNESS] Check gateway access, harness installation, and the OCR route
+  doctor [HARNESS] Check gateway access, harness installation, the OCR route,
+                  and the per-node service registration
+  canary           Check the OCR route through the gateway; silent on success,
+                  detailed and loud on failure (for scheduled checks)
   update           Update the Mac CLI and both Sparks (--check previews only)
   ui               Open the gateway UI (--json prints the URL)
   init             Create the client connection file (--gateway REQUIRED)

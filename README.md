@@ -40,7 +40,8 @@ sparky config show                  # Central configuration as a table
 sparky config show qwen             # Per-placement model settings
 sparky config validate              # A validation result, without a file dump
 sparky logs --limit 5               # Local harness launch history
-sparky doctor                       # Check the gateway, harnesses, and the OCR route
+sparky doctor                       # Check the gateway, harnesses, OCR route, and service registration
+sparky canary                       # Cheap route check for scheduled jobs; silent on success
 ```
 
 `sparky status` groups running workloads by Spark. Each row shows the context limit, measured GPU allocation, and host RAM. Host RAM uses proportional resident memory (PSS), which divides shared pages among their processes. GPU memory includes weights and allocated context caches. These are observations of shared physical RAM and can overlap. Do not add the two columns.

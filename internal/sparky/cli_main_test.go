@@ -451,6 +451,11 @@ func TestMainDoctorNeverInfers(t *testing.T) {
 	}
 	t.Setenv("PATH", emptyBin)
 	t.Setenv("HOME", dir)
+	// Deterministic service checks: the fake runner answers the SSH probes
+	// with canned output, so no real SSH is attempted and the route check
+	// stays a plain HTTP call.
+	fakeDoctorServiceRun(t)
+	setSmoke(t, ocrSmokeOK)
 	code, out, errout := runMain([]string{"doctor", "--json"}, "")
 	if code != 1 { // no harness binaries are installed here
 		t.Fatalf("doctor code: %d %q", code, errout)
@@ -468,6 +473,18 @@ func TestMainDoctorNeverInfers(t *testing.T) {
 	}
 	if first := obj(checks[0]); first["name"] != "gateway" || first["ok"] != true {
 		t.Fatalf("gateway check: %v", first)
+	}
+	// The service checks run through the fake SSH runner and report the
+	// serve mappings and MCP client state.
+	serviceChecks := arr(data["service_checks"])
+	if len(serviceChecks) != 4 {
+		t.Fatalf("service checks: %v", serviceChecks)
+	}
+	for _, raw := range serviceChecks {
+		check := obj(raw)
+		if str(check["status"]) != "verified" {
+			t.Fatalf("service check must be verified: %v", check)
+		}
 	}
 }
 

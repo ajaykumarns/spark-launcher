@@ -443,6 +443,35 @@ func heading(title string, color bool, width int) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
+// formatCanaryFailure renders the failed canary report. Output is only
+// emitted on failure, so a healthy canary is silent and a cron delivers
+// nothing.
+func formatCanaryFailure(data Object, width int, color bool) string {
+	rows := []styledRow{}
+	for _, raw := range arr(data["checks"]) {
+		check := obj(raw)
+		result := "failed"
+		if boolean(check["ok"]) {
+			result = "ok"
+		}
+		rows = append(rows, styledRow{str(check["name"]), result, strings.Join(strings.Fields(str(check["message"])), " ")})
+	}
+	routeRows := []styledRow{}
+	for _, raw := range arr(data["routes"]) {
+		check := obj(raw)
+		result := "failed"
+		if str(check["status"]) == "verified" {
+			result = "ok"
+		}
+		routeRows = append(routeRows, styledRow{profileLabel(str(check["capability"])), result, strings.Join(strings.Fields(str(check["detail"])), " ")})
+	}
+	out := table([]string{"CHECK", "RESULT", "DETAIL"}, rows, "Canary failed", width, color)
+	if len(routeRows) > 0 {
+		out += "\n" + table([]string{"ROUTE", "RESULT", "DETAIL"}, routeRows, "Route verification", width, color)
+	}
+	return out
+}
+
 func note(message string, tone string, color bool, width int) string {
 	// Notes wrap to the requested width so narrow screens keep every word.
 	var b strings.Builder
@@ -1021,6 +1050,15 @@ func formatDoctor(data Object, width int, color bool) string {
 		}
 		out += "\n" + table([]string{"ROUTE", "RESULT", "DETAIL"}, routeRows, "Route verification", width, color)
 	}
+	serviceChecks := arr(data["service_checks"])
+	if len(serviceChecks) > 0 {
+		serviceRows := []styledRow{}
+		for _, item := range serviceChecks {
+			label, result, detail := serviceCheckResult(obj(item))
+			serviceRows = append(serviceRows, styledRow{label, result, detail})
+		}
+		out += "\n" + table([]string{"SERVICE", "RESULT", "DETAIL"}, serviceRows, "Service checks", width, color)
+	}
 	noteText := "No inference was run."
 	if len(routes) > 0 {
 		noteText = "One tiny OCR request was sent through the gateway."
@@ -1339,6 +1377,8 @@ func terminalRender(kind string, data any, options terminalOptions) string {
 		return formatLogs(objOrEmpty(data), width, color)
 	case "doctor":
 		return formatDoctor(objOrEmpty(data), width, color)
+	case "canary-failure":
+		return formatCanaryFailure(objOrEmpty(data), width, color)
 	case "profile-list":
 		return formatProfileList(objOrEmpty(data), width, color)
 	case "status":

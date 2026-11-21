@@ -112,12 +112,35 @@ are reported as "not verified" until a real probe exists for them — a running
 service is reported as running, never as verified. `sparky doctor` checks the
 same OCR route and exits nonzero when it fails.
 
+`sparky doctor` also checks the per-node service registration with read-only
+SSH probes (`tailscale serve status` on the worker node, and the spark_ocr MCP
+client's connection string through the gateway admin API on the gateway host).
+The serve check derives the service's actual URL from the live serve mapping
+— it never hardcodes one — and the MCP check compares the client's connection
+string against that URL. An OCR placement change without a gateway re-point
+shows up as a failed MCP connection-string check; the same drift shows up as
+a failed route probe.
+
+The per-node service-URL catalog lives in
+`internal/sparky/service_check.go`: each capability carries its local port,
+gateway route, and MCP path. Only OCR has a real probe today; speech and
+transcription get the serve-mapping check and report "not verified" in the
+route section until a real probe exists for them.
+
 The gateway's per-provider routes (for example the OCR provider's base URL)
-are not re-written by Profile apply. They are written once when the provider
-is installed, and drift after an OCR placement change is detected by the
-route verification above. To re-point a provider after moving its service,
-edit the provider through the gateway admin API (the same base-URL-only
-pattern the installation uses) and re-run `sparky doctor`.
+and the spark_ocr MCP client connection string are not re-written by Profile
+apply or doctor. They are written once when the service is installed, and
+drift after an OCR placement change is detected by the route verification and
+the service checks above. To re-point either after moving its service, edit
+the provider or MCP client through the gateway admin API (the same
+base-URL-only pattern the installation uses) on the gateway host, then re-run
+`sparky doctor`.
+
+`sparky canary` is the scheduled route check: gateway reachability plus the
+OCR route through the gateway. It is silent on success (so a cron delivers
+nothing) and prints the failure details and exits nonzero on failure (so a
+cron can deliver an alert). It never touches harnesses, services, or SSH —
+`sparky doctor` does the full check.
 
 During apply, the CLI and menu bar show every active step and its elapsed
 time. JSON status includes these steps in `profile_transition.active_steps`.

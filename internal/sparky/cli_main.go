@@ -389,6 +389,23 @@ func cliDispatch(ctx context.Context, cfg clientConfig, inv *cliInvocation, in i
 			return 0
 		}
 		return 1
+	case "canary":
+		// The scheduled route check: silent on success so a cron delivers
+		// nothing, loud and detailed on failure so a cron can deliver the
+		// failure. In JSON mode the full result object is printed either way.
+		data := cliCanary(ctx, cfg)
+		if inv.JSON {
+			_, _ = out.Write(jsonBytes(data))
+			if boolean(data["ok"]) {
+				return 0
+			}
+			return 1
+		}
+		if boolean(data["ok"]) {
+			return 0
+		}
+		fmt.Fprintln(out, cliRender(inv, out, "canary-failure", data))
+		return 1
 	case "ui":
 		return cliUICommand(cfg, inv, out, errout)
 	case "admin":
@@ -687,9 +704,10 @@ func cliSyncCommand(ctx context.Context, cfg clientConfig, inv *cliInvocation, o
 	return 0
 }
 
-// cliDoctor checks gateway access, harness installation, and the OCR route.
-// Route verification is one tiny OCR request through the gateway; nothing
-// else is sent.
+// cliDoctor checks gateway access, harness installation, the OCR route, and
+// the per-node service registration. Route verification is one tiny OCR
+// request through the gateway; service checks are read-only SSH probes and
+// the pinned gateway admin API read. Nothing else is sent.
 func cliDoctor(ctx context.Context, cfg clientConfig, harness string) Object {
 	checks := []any{}
 	catalog, err := clientFetchCatalog(cfg, false)
@@ -712,6 +730,41 @@ func cliDoctor(ctx context.Context, cfg clientConfig, harness string) Object {
 		}
 		checks = append(checks, Object{"name": name, "ok": true, "message": binary})
 	}
+	serviceChecks := doctorServiceChecks(ctx, cfg)
+	ok := true
+	for _, checkAny := range checks {
+		if !boolean(checkAny.(Object)["ok"]) {
+			ok = false
+		}
+	}
+	for _, raw := range routes {
+		if str(obj(raw)["status"]) == "failed" {
+			ok = false
+		}
+	}
+	for _, check := range serviceChecks {
+		if str(check["status"]) == "failed" {
+			ok = false
+		}
+	}
+	return Object{"ok": ok, "checks": checks, "routes": routes, "service_checks": serviceChecks, "inference": false}
+}
+
+// cliCanary is the cheap scheduled route check: gateway reachability plus
+// the OCR route through the gateway. It reports nothing on success so a
+// cron can deliver nothing, and reports the failure details on failure so a
+// cron can deliver an alert. No local harnesses, no SSH probes, and nothing
+// else.
+func cliCanary(ctx context.Context, cfg clientConfig) Object {
+	checks := []any{}
+	catalog, err := clientFetchCatalog(cfg, false)
+	if err != nil {
+		checks = append(checks, Object{"name": "gateway", "ok": false, "message": err.Error()})
+	} else {
+		checks = append(checks, Object{"name": "gateway", "ok": true,
+			"message": fmt.Sprintf("Reachable; %d model routes.", len(arr(catalog["models"])))})
+	}
+	routes := verifyProfileRoutes(ctx, cfg, []any{Object{"name": "ocr"}})
 	ok := true
 	for _, checkAny := range checks {
 		if !boolean(checkAny.(Object)["ok"]) {
