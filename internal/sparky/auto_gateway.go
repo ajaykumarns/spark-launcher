@@ -53,9 +53,12 @@ func syncGatewayAutoRule(ctx context.Context, cfg Object, models []string, decis
 	if decision {
 		priority = 1
 		name, description = "sparky-decision-auto", "Sparky ready decision model pool"
-		// "spark-decision" is not a registered Bifrost provider, so ParseModelString
-		// leaves the prefix attached to the model. Match the request string as a whole.
-		expression = "request_type == 'decisions' && model == 'spark-decision/auto'"
+		// The spark-decision alias provider is registered in Bifrost, so
+		// ParseModelString splits it and leaves model == 'auto'. While the
+		// gateway is unregistered or mid-restart, ParseModelString leaves the
+		// prefix attached to the model. Match both shapes so the rule still
+		// matches during a rolling install.
+		expression = "request_type == 'decisions' && ((provider == '' && model == 'spark-decision/auto') || (provider == 'spark-decision' && model == 'auto'))"
 		targets, fallbacks = autoRuleTargetsFor(models, "spark-decisions", "spark-decision", decisionAutoUnavailableModel)
 	}
 

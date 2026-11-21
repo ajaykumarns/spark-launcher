@@ -106,8 +106,9 @@ func TestDecisionAutoGatewayKeepsChatRuleAndUsesReadyDecisionProvider(t *testing
 		t.Fatal(err)
 	}
 	rule := fake.named("sparky-decision-auto")
-	if str(rule["cel_expression"]) != "request_type == 'decisions' && model == 'spark-decision/auto'" {
-		t.Fatal(rule)
+	wantExpr := "request_type == 'decisions' && ((provider == '' && model == 'spark-decision/auto') || (provider == 'spark-decision' && model == 'auto'))"
+	if str(rule["cel_expression"]) != wantExpr {
+		t.Fatalf("CEL mismatch: %s", rule["cel_expression"])
 	}
 	if num(rule["priority"]) == num(chat["priority"]) {
 		t.Fatal("Bifrost requires distinct priorities for global rules")
