@@ -11,6 +11,15 @@ type profileServicePlan struct {
 	stop, start, keep, blockers []any
 }
 
+func profileServiceMemoryFloors(cfg, step Object) Object {
+	model := obj(obj(cfg["models"])[str(step["workload"])])
+	nodes := stringsOf(step["nodes"])
+	if len(nodes) != 1 {
+		return nil
+	}
+	return obj(obj(obj(model["settings"])[nodes[0]])["minimum_available_gib"])
+}
+
 func (p *profileServicePlan) add(action, name, node, kind string) {
 	step := profileStep(action, name, []string{node})
 	switch action {

@@ -62,7 +62,11 @@ The scheduler also reserves devices used by a conditional peer stop or a
 startup memory check. It reads available memory again after earlier steps
 and conditional stops finish. It enforces configured startup memory floors
 for models and services. The native model supervisor retains its own memory
-and image-job checks. Conditional peer stops keep their gateway update and
+and image-job checks. The final memory check runs after device admission.
+Service starts also hold an exclusive device reservation through
+readiness. Plans include service startup memory floors and block starts
+that cannot fit without a planned memory change on that device.
+Conditional peer stops keep their gateway update and
 shutdown in sequence. Final route updates run after all starts finish.
 
 Apply makes a fresh plan on the controller. It uses the existing lifecycle
@@ -72,7 +76,9 @@ the last successfully applied profile name. Review the live state and plan
 again after a failure. Sparky does not automatically restart the prior set
 of models or apply a profile at boot. After a start fails, Sparky schedules no
 new starts. It waits for starts already in progress to finish and includes
-their completed steps in the failure result.
+their completed steps and all startup errors in the failure result. Failed
+CLI results list completed steps instead of presenting unattempted plan
+steps as completed work.
 
 List a provider to start it or keep it running. Omit it to stop it.
 Use `capabilities: {}` to stop all profile workloads. Profiles

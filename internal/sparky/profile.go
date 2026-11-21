@@ -357,7 +357,22 @@ func planProfile(cfg Object, p clusterProfile, snapshot Object, ready func(profi
 		started = unionNodes(started, target.nodes)
 	}
 
-	steps = append(steps, services.start...)
+	for _, raw := range services.start {
+		step := obj(raw)
+		floors := profileServiceMemoryFloors(cfg, step)
+		if len(floors) > 0 {
+			step["minimum_available_gib"] = copyObject(floors)
+			step["recheck_memory_at_start"] = true
+			for _, node := range keys(floors) {
+				minimum, available := num(floors[node]), profileAvailableGiB(snapshot, node)
+				if available < minimum && !contains(released, node) && !contains(started, node) {
+					blockers = append(blockers, fmt.Sprintf("%s needs %.1f GiB available on %s to start. It currently has %.1f GiB and no stop is planned there.", str(step["workload"]), minimum, node, available))
+				}
+			}
+		}
+		steps = append(steps, step)
+		started = unionNodes(started, stringsOf(step["nodes"]))
+	}
 
 	routes := Object{}
 	for _, route := range []struct{ key, alias string }{{"auto", "spark-auto"}, {"decision_auto", "spark-decision/auto"}} {
@@ -642,24 +657,35 @@ func renderProfile(result Object) string {
 		}
 		out.WriteString(profileCapabilitySummary(groups))
 	}
-	for _, key := range []string{"kept", "steps"} {
+	stepKeys := []string{"kept", "steps"}
+	if str(result["status"]) == "failed" {
+		stepKeys = []string{"completed"}
+		out.WriteString("Completed steps\n")
+		if len(arr(result["completed"])) == 0 {
+			out.WriteString("  No steps completed.\n")
+		}
+	}
+	for _, key := range stepKeys {
 		for _, v := range arr(result[key]) {
 			row := obj(v)
 			fmt.Fprintf(&out, "  %s %s on %s", str(row["action"]), str(row["workload"]), strings.Join(stringsOf(row["nodes"]), ", "))
-			if boolean(row["only_if_stopped_for_startup"]) {
+			if key != "completed" && boolean(row["only_if_stopped_for_startup"]) {
 				out.WriteString(" (only if stopped to make room)")
 			}
-			if boolean(row["recheck_memory_at_start"]) {
+			if key != "completed" && boolean(row["recheck_memory_at_start"]) {
 				out.WriteString(" (check available memory at startup)")
 			}
 			out.WriteByte('\n')
+			if key == "completed" {
+				continue
+			}
 			for _, raw := range arr(row["stop_if_low_memory"]) {
 				peer := obj(raw)
 				fmt.Fprintf(&out, "    May first stop %s on %s if memory is low.\n", str(peer["workload"]), strings.Join(stringsOf(peer["nodes"]), ", "))
 			}
 		}
 	}
-	if len(arr(result["steps"])) == 0 {
+	if str(result["status"]) != "failed" && len(arr(result["steps"])) == 0 {
 		out.WriteString("  No model or service starts, stops, or restarts.\n")
 	}
 	routes := obj(result["expected_routes"])
@@ -674,7 +700,7 @@ func renderProfile(result Object) string {
 		fmt.Fprintf(&out, "  Blocked: %s\n", str(v))
 	}
 	if err := str(result["error"]); err != "" {
-		fmt.Fprintf(&out, "  Stopped after %d steps: %s\n", len(arr(result["completed"])), err)
+		fmt.Fprintf(&out, "  Failed after %d completed steps: %s\n", len(arr(result["completed"])), err)
 	}
 	if err := str(result["routing_error"]); err != "" {
 		fmt.Fprintf(&out, "  Route update failed: %s\n", err)

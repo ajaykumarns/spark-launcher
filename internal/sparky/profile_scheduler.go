@@ -2,6 +2,7 @@ package sparky
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"sync"
@@ -98,6 +99,7 @@ func scheduleProfileStarts(ctx context.Context, tasks []profileStartTask, run fu
 	results := make(chan outcome, len(tasks))
 	started, finished := make([]bool, len(tasks)), make([]bool, len(tasks))
 	effects := make([][]any, len(tasks))
+	failures := make([]error, len(tasks))
 	active, remaining := 0, len(tasks)
 	var firstErr error
 	receive := func(result outcome) {
@@ -105,8 +107,11 @@ func scheduleProfileStarts(ctx context.Context, tasks []profileStartTask, run fu
 		remaining--
 		finished[result.index] = true
 		effects[result.index] = result.completed
-		if firstErr == nil && result.err != nil {
-			firstErr = fmt.Errorf("Step %d (%s): %w", tasks[result.index].index+1, profileStepMessage(tasks[result.index].step), result.err)
+		if result.err != nil {
+			failures[result.index] = fmt.Errorf("Step %d (%s): %w", tasks[result.index].index+1, profileStepMessage(tasks[result.index].step), result.err)
+			if firstErr == nil {
+				firstErr = failures[result.index]
+			}
 		}
 	}
 	drain := func() {
@@ -160,7 +165,25 @@ func scheduleProfileStarts(ctx context.Context, tasks []profileStartTask, run fu
 	for _, steps := range effects {
 		completed = append(completed, steps...)
 	}
-	return completed, firstErr
+	// Keep every failure from starts that were already running, in plan
+	// order. The first failure still stops further scheduling immediately.
+	problems := []error{}
+	for _, err := range failures {
+		if err != nil {
+			problems = append(problems, err)
+		}
+	}
+	if len(problems) == 0 {
+		return completed, firstErr
+	}
+	joined := errors.Join(problems...)
+	if err := ctx.Err(); err != nil && !errors.Is(joined, err) {
+		joined = errors.Join(joined, err)
+	}
+	if len(problems) > 1 {
+		joined = fmt.Errorf("%d profile starts failed: %w", len(problems), joined)
+	}
+	return completed, joined
 }
 
 func (c *Coordinator) applyProfileSteps(ctx context.Context, cfg Object, steps []any, checkConfig func() error) ([]any, bool, error) {
@@ -215,6 +238,19 @@ func (c *Coordinator) applyProfileSteps(ctx context.Context, cfg Object, steps [
 		// Each start uses its own snapshot cache and immutable configuration.
 		rt := c.runtime.frozenClone(cfg)
 		if kind := str(step["service_kind"]); kind != "" {
+			// Service startup can allocate CPU/GPU memory too. Hold the same
+			// exclusive device admission used for model startup through both
+			// the fresh memory check and readiness. Otherwise an image job can
+			// acquire the device between the check and the container start.
+			c.reconcileJobs(ctx)
+			id, acquireErr := c.acquire(ctx, model, task.nodes, true, 0, "", "", true)
+			if acquireErr != nil {
+				return effects, acquireErr
+			}
+			defer c.release(id)
+			if err = checkConfig(); err != nil {
+				return effects, err
+			}
 			if err = checkProfileStartMemory(ctx, rt, step); err == nil {
 				err = c.applyProfileService(ctx, rt, kind, step)
 			}
@@ -241,9 +277,9 @@ func (c *Coordinator) applyProfileSteps(ctx context.Context, cfg Object, steps [
 				return nil
 			})
 			if err == nil {
-				err = checkProfileStartMemory(ctx, rt, step)
-			}
-			if err == nil {
+				// The native supervisor checks the recipe's memory floor after
+				// loadLocked acquires its exclusive device lease. A check here
+				// would reject transient memory use by a job we must first drain.
 				phase(profileStepMessage(step) + "; waiting for readiness")
 				_, err = c.loadLocked(ctx, cfg, model, "", str(step["on"]), c.generationCopy(), true)
 			}

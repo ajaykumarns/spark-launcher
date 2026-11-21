@@ -296,6 +296,9 @@ func TestProfileStartsReachRealLifecycleAndServiceAdaptersInParallel(t *testing.
 			if str(result["status"]) != "failed" || len(arr(c.ProfileProgress("")["active_steps"])) != 0 {
 				t.Fatalf("failed parallel start did not finish cleanly: %v", result)
 			}
+			if state := c.Admission(); len(arr(state["active"])) != 0 || len(arr(state["waiting"])) != 0 {
+				t.Fatalf("failed parallel startup retained a device reservation: %v", state)
+			}
 			if _, err := os.Stat(profileStatePath(cfg)); !os.IsNotExist(err) {
 				t.Fatal("failed starts saved a successful profile")
 			}
