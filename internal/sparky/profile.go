@@ -137,6 +137,14 @@ func (file profileFile) profile(name string, cfg Object) (clusterProfile, error)
 			seen[canonical] = true
 			if str(m["kind"]) == "llm" {
 				p.models = append(p.models, profileModel{canonical, on, nodes, m, s})
+			} else if canonical == "comfyui" && on == "both" {
+				for _, node := range nodes {
+					if _, _, _, _, err := selectPlacement(cfg, canonical, node); err != nil {
+						return p, err
+					}
+					providers = append(providers, Object{"workload": canonical, "nodes": anyStrings([]string{node})})
+				}
+				continue
 			} else if len(nodes) != 1 {
 				return p, fail("Give service %s an explicit single Spark.", id)
 			}
@@ -231,16 +239,25 @@ func profileAvailability(groups []any, ready func(Object) bool) []any {
 }
 
 func profileServicePlacement(groups []any, name string) string {
+	nodes := profileServiceNodes(groups, name)
+	if len(nodes) == 1 {
+		return nodes[0]
+	}
+	return ""
+}
+
+func profileServiceNodes(groups []any, name string) []string {
+	var result []string
 	for _, raw := range groups {
 		for _, item := range arr(obj(raw)["providers"]) {
 			provider := obj(item)
 			nodes := stringsOf(provider["nodes"])
-			if str(provider["workload"]) == name && len(nodes) == 1 {
-				return nodes[0]
+			if str(provider["workload"]) == name {
+				result = unionNodes(result, nodes)
 			}
 		}
 	}
-	return ""
+	return result
 }
 
 func profileProviderKept(kept []any, provider Object) bool {

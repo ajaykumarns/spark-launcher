@@ -62,9 +62,9 @@ func planProfileServices(cfg Object, groups []any, snapshot Object) profileServi
 		}
 	}
 
-	imageNode := profileServicePlacement(groups, "comfyui")
+	imageNodes := profileServiceNodes(groups, "comfyui")
 	for _, node := range keys(obj(cfg["nodes"])) {
-		plan.addComfy(cfg, snapshot, node, imageNode == node)
+		plan.addComfy(cfg, snapshot, node, contains(imageNodes, node))
 	}
 
 	ocrNode := profileServicePlacement(groups, "spark-ocr")

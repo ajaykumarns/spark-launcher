@@ -1576,14 +1576,19 @@ func (c *Coordinator) submitComfyPinned(cfg Object, on string, workflow Object) 
 	}
 	managed := profile != nil
 	if managed {
-		selected := profileServicePlacement(arr(profile["capabilities"]), "comfyui")
-		if selected == "" {
+		selected := profileServiceNodes(arr(profile["capabilities"]), "comfyui")
+		if len(selected) == 0 {
 			return "", nil, fail("The applied profile does not include ComfyUI.")
 		}
-		if on != "" && on != selected {
-			return "", nil, fail("The applied profile runs ComfyUI on %s.", selected)
+		if on == "" && len(selected) > 1 {
+			return "", nil, fail("Choose --on spark01 or --on spark02 for this image profile.")
 		}
-		on = selected
+		if on != "" && !contains(selected, on) {
+			return "", nil, fail("The applied profile runs ComfyUI on %s.", strings.Join(selected, ", "))
+		}
+		if on == "" {
+			on = selected[0]
+		}
 	}
 	_, s, nodes, _, err := selectPlacement(cfg, "comfyui", on)
 	if err != nil {
