@@ -24,6 +24,7 @@ type clusterProfile struct {
 	description  string
 	models       []profileModel
 	capabilities []any
+	autoWeights  Object
 }
 
 type profileFile struct {
@@ -31,6 +32,7 @@ type profileFile struct {
 	Profiles map[string]struct {
 		Description  yaml.Node `yaml:"description"`
 		Capabilities yaml.Node `yaml:"capabilities"`
+		AutoWeights  yaml.Node `yaml:"auto_weights"`
 	} `yaml:"profiles"`
 }
 
@@ -152,6 +154,11 @@ func (file profileFile) profile(name string, cfg Object) (clusterProfile, error)
 		}
 		p.capabilities = append(p.capabilities, Object{"name": group, "providers": providers})
 	}
+	weights, err := parseProfileAutoWeights(entry.AutoWeights, p, cfg)
+	if err != nil {
+		return p, err
+	}
+	p.autoWeights = weights
 	return p, nil
 }
 
@@ -180,6 +187,9 @@ func listProfiles(root string) (Object, error) {
 			row["error"] = err.Error()
 		} else {
 			row["capabilities"] = p.capabilities
+			if len(p.autoWeights) > 0 {
+				row["auto_weights"] = copyObject(p.autoWeights)
+			}
 		}
 		profiles = append(profiles, row)
 	}
@@ -409,6 +419,9 @@ func planProfile(cfg Object, p clusterProfile, snapshot Object, ready func(profi
 		"capabilities": profileAvailability(p.capabilities, func(provider Object) bool {
 			return profileProviderKept(kept, provider)
 		})}
+	if len(p.autoWeights) > 0 {
+		result["auto_weights"] = copyObject(p.autoWeights)
+	}
 	if p.description != "" {
 		result["description"] = p.description
 	}
@@ -527,7 +540,7 @@ func (c *Coordinator) profile(name string, apply bool, expectedPlan, progressID 
 		return nil, err
 	}
 	result["plan_id"] = fmt.Sprintf("%x", sha256.Sum256(jsonBytes(Object{
-		"name": name, "description": p.description, "config": cfg, "providers": p.capabilities, "steps": result["steps"],
+		"name": name, "description": p.description, "config": cfg, "providers": p.capabilities, "steps": result["steps"], "auto_weights": p.autoWeights,
 	})))
 	if !apply || boolean(result["blocked"]) {
 		return result, nil
@@ -580,9 +593,9 @@ func (c *Coordinator) profile(name string, apply bool, expectedPlan, progressID 
 	if boolean(verified["blocked"]) || len(arr(verified["steps"])) > 0 {
 		return failed(fail("The running state still differs from the profile. Review a new plan."))
 	}
-	if modelChanged {
+	if gatewayAutoEnabled(cfg) {
 		c.profilePhase("Updating gateway routes", 0, len(steps))
-		if err := c.syncAutoRoutesLocked(ctx, nil); err != nil {
+		if err := c.syncProfileAutoRoutesLocked(ctx, nil, p); err != nil {
 			return failed(err)
 		}
 	}
@@ -665,6 +678,14 @@ func renderProfile(result Object) string {
 	fmt.Fprintf(&out, "Profile %s (%s)\n", str(result["profile"]), str(result["status"]))
 	if description := strings.Join(strings.Fields(str(result["description"])), " "); description != "" {
 		fmt.Fprintln(&out, description)
+	}
+	if weights := obj(result["auto_weights"]); len(weights) > 0 {
+		shares := autoReadyWeights(keys(weights), weights)
+		parts := []string{}
+		for _, model := range keys(shares) {
+			parts = append(parts, fmt.Sprintf("%s %.1f%%", model, 100*num(shares[model])))
+		}
+		fmt.Fprintf(&out, "spark-auto weights: %s\n", strings.Join(parts, ", "))
 	}
 	if groups := arr(result["capabilities"]); len(groups) > 0 {
 		if str(result["status"]) == "failed" {

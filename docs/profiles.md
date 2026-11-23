@@ -149,3 +149,46 @@ During apply, the CLI and menu bar show every active step and its elapsed
 time. JSON status includes these steps in `profile_transition.active_steps`.
 The saved profile remains the last successful selection until the new profile
 passes its final checks.
+
+## Chat routing weights
+
+With `auto.routing: bifrost`, use optional `auto_weights` to set the
+`spark-auto` share for each chat
+provider in a profile. For example:
+
+```yaml
+profiles:
+  everyday:
+    auto_weights:
+      qwen3.8-flash-next: 0.65
+      ornith-1.5-35b-a3b-nvfp4: 0.35
+    capabilities:
+      chat:
+        - qwen3.8-flash-next: spark01
+        - ornith-1.5-35b-a3b-nvfp4: spark02
+```
+
+Each weight must be a finite positive number. Relative values such as 65 and
+35 also work. Include every chat provider exactly once. Model aliases are
+accepted and stored under their canonical model names. Unknown providers,
+decision models, duplicate aliases, and incomplete maps are rejected.
+
+When a weighted profile is selected, `spark-auto` uses only its ready chat
+providers that are also permitted by `auto.targets`. Sparky normalizes their
+weights. If only one is ready, it receives 100 percent. If none are ready,
+Sparky publishes the existing unavailable target. Routing never loads a
+stopped model. Models loaded outside a weighted profile remain available
+through their direct routes. Profiles without `auto_weights` retain equal
+routing across the ready pool.
+
+Bifrost still owns session affinity. The weights choose a route for new
+sessions or requests without an affinity match. A stable `x-bf-session-id`
+keeps later requests on the chosen model while that affinity remains valid.
+The shares are approximate; they do not divide tokens or GPU time.
+
+Profile apply uses the target profile's weights even if no models need a
+restart. Normal route reconciliation reads the saved profile file, so
+controller restarts and `sparky sync` preserve the configured shares. Invalid
+edits report an error and leave the last gateway rule intact. Decision routing
+is unchanged. `profiles plan`, `profiles list --json`, and `status --json`
+expose the configured or effective shares.

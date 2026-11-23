@@ -48,7 +48,7 @@ func syncDecisionAutoGateway(ctx context.Context, cfg Object, models []string) e
 
 func syncGatewayAutoRule(ctx context.Context, cfg Object, models []string, decision bool) error {
 	name, description, expression := autoRuleName, autoRuleDescription, autoRuleCEL
-	targets, fallbacks := autoRuleTargets(models)
+	targets, fallbacks := autoRuleTargetsWeightedFor(models, "garuda", "garuda", autoUnavailableModel, obj(obj(cfg["auto"])["profile_weights"]))
 	priority := 0
 	if decision {
 		priority = 1
@@ -144,11 +144,15 @@ func autoRuleTargets(models []string) ([]any, []any) {
 }
 
 func autoRuleTargetsFor(models []string, provider, unavailableProvider, unavailableModel string) ([]any, []any) {
+	return autoRuleTargetsWeightedFor(models, provider, unavailableProvider, unavailableModel, nil)
+}
+
+func autoRuleTargetsWeightedFor(models []string, provider, unavailableProvider, unavailableModel string, weights Object) ([]any, []any) {
 	seen := make(map[string]bool, len(models))
 	clean := make([]string, 0, len(models))
 	for _, model := range models {
 		model = strings.TrimSpace(model)
-		if model == "" || seen[model] {
+		if model == "" || seen[model] || (len(weights) > 0 && num(weights[model]) <= 0) {
 			continue
 		}
 		seen[model] = true
@@ -163,10 +167,20 @@ func autoRuleTargetsFor(models []string, provider, unavailableProvider, unavaila
 	}
 
 	sort.Strings(clean)
-	weight := 1.0 / float64(len(clean))
+	total := float64(len(clean))
+	if len(weights) > 0 {
+		total = 0
+		for _, model := range clean {
+			total += num(weights[model])
+		}
+	}
 	targets := make([]any, 0, len(clean))
 	fallbacks := make([]any, 0, len(clean))
 	for _, model := range clean {
+		weight := 1.0 / total
+		if len(weights) > 0 {
+			weight = num(weights[model]) / total
+		}
 		targets = append(targets, Object{"provider": provider, "model": model, "weight": weight})
 		fallbacks = append(fallbacks, provider+"/"+model)
 	}
@@ -273,4 +287,20 @@ func autoRuleEqual(current, desired Object) bool {
 		}
 	}
 	return true
+}
+
+// autoReadyWeights describes the same normalized ready pool sent to Bifrost.
+func autoReadyWeights(models []string, configured Object) Object {
+	result := Object{}
+	if len(models) == 0 {
+		return result
+	}
+	targets, _ := autoRuleTargetsWeightedFor(models, "garuda", "garuda", autoUnavailableModel, configured)
+	for _, raw := range targets {
+		target := obj(raw)
+		if name := str(target["model"]); name != autoUnavailableModel {
+			result[name] = target["weight"]
+		}
+	}
+	return result
 }

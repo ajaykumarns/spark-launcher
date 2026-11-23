@@ -25,7 +25,17 @@ func (e autoUnavailableError) HTTPStatus() int { return http.StatusServiceUnavai
 // syncAutoRoutesLocked runs under reconfigure. The same gate protects lifecycle
 // changes, so an availability update cannot race a planned model stop.
 func (c *Coordinator) syncAutoRoutesLocked(ctx context.Context, excluded []string) error {
-	cfg := c.cfg()
+	cfg, err := selectedProfileAutoRoutingConfig(c.cfg(), c.path)
+	if err != nil {
+		c.mu.Lock()
+		c.autoPool = Object{"available": false, "routing": "bifrost", "routing_error": err.Error()}
+		c.mu.Unlock()
+		return err
+	}
+	return c.syncAutoRoutesForConfigLocked(ctx, cfg, excluded)
+}
+
+func (c *Coordinator) syncAutoRoutesForConfigLocked(ctx context.Context, cfg Object, excluded []string) error {
 	if err := c.syncChatAutoRoutesLocked(ctx, cfg, excluded); err != nil {
 		return err
 	}
@@ -38,7 +48,13 @@ func (c *Coordinator) syncChatAutoRoutesLocked(ctx context.Context, cfg Object, 
 	}
 	names := []string{}
 	selections := []*runtimeSelection{}
+	weights := obj(obj(cfg["auto"])["profile_weights"])
 	for _, name := range stringsOf(obj(cfg["auto"])["targets"]) {
+		if len(weights) > 0 {
+			if _, ok := weights[name]; !ok {
+				continue
+			}
+		}
 		if contains(excluded, name) {
 			continue
 		}
@@ -108,7 +124,10 @@ func (c *Coordinator) syncDecisionAutoRoutesLocked(ctx context.Context, cfg Obje
 // Loading a previously configured smaller model therefore does not reduce the
 // budget between a client's metadata lookup and its next inference request.
 func autoPoolMetadata(cfg Object, names []string, selections []*runtimeSelection) Object {
-	row := Object{"available": len(names) > 0, "routing": "bifrost", "request_model": "spark-auto", "ready_models": anyStrings(names)}
+	row := Object{"available": len(names) > 0, "routing": "bifrost", "request_model": "spark-auto", "ready_models": anyStrings(names), "weights": autoReadyWeights(names, obj(obj(cfg["auto"])["profile_weights"]))}
+	if profile := str(obj(cfg["auto"])["profile_name"]); profile != "" {
+		row["profile"] = profile
+	}
 	if len(names) == 0 {
 		return row
 	}
@@ -168,7 +187,7 @@ func autoPoolMetadata(cfg Object, names []string, selections []*runtimeSelection
 		return Object{"available": false, "routing": "bifrost", "routing_error": "Automatic targets have no valid common token budget."}
 	}
 	sort.Strings(identities)
-	encoded, _ := json.Marshal([]any{identities, window, output})
+	encoded, _ := json.Marshal([]any{identities, window, output, row["weights"]})
 	digest := sha256.Sum256(encoded)
 	row["runtime_generation"] = hex.EncodeToString(digest[:])
 	row["context_length"], row["context_window"] = window, window
