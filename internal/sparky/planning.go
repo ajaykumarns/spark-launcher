@@ -127,16 +127,13 @@ func makePlan(c Object, name string, snapshot Object, action, on string) (Object
 }
 
 func modelCatalog(c Object) Object {
-	data := []any{}
+	data := arr(publicCatalog(c)["data"])
 	byID := Object{}
+	for _, row := range data {
+		byID[strings.TrimPrefix(str(obj(row)["id"]), "garuda/")] = row
+	}
 	for _, name := range enabledLLMs(c) {
-		m, s, nodes, _, _ := selectPlacement(c, name, "")
-		row := Object{"id": "garuda/" + name, "name": value(m, "name", name), "context_length": s["context_tokens"], "output_tokens": value(m, "output_tokens", min(16384, num(s["context_tokens"])-1)), "aliases": value(m, "aliases", []any{}), "inputs": value(m, "inputs", []any{"text"}), "reasoning": value(m, "reasoning", false), "nodes": nodes}
-		if kind := str(m["api_kind"]); kind != "" {
-			row["api_kind"] = kind
-		}
-		data = append(data, row)
-		byID[name] = row
+		byID[name] = byID[publicModel(c, name)]
 	}
 	// The public spark-auto entry advertises the common budget of the
 	// configured auto targets only; disabled models never appear.

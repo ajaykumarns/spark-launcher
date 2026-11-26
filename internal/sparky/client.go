@@ -209,7 +209,7 @@ func clientMakeCatalog(cfg clientConfig, wire Object) (Object, error) {
 			return nil, fail("The gateway returned duplicate model IDs.")
 		}
 		seen[modelID] = true
-		for _, field := range []string{"aliases", "inputs", "nodes"} {
+		for _, field := range []string{"aliases", "legacy_ids", "inputs", "nodes"} {
 			if v, present := row[field]; present {
 				if _, ok := v.([]any); !ok {
 					return nil, fail("The gateway returned invalid %s metadata.", field)
@@ -244,7 +244,7 @@ func clientMakeCatalog(cfg clientConfig, wire Object) (Object, error) {
 			continue
 		}
 		model := Object{}
-		for _, k := range []string{"name", "aliases", "output_tokens", "inputs", "reasoning", "nodes"} {
+		for _, k := range []string{"name", "aliases", "legacy_ids", "output_tokens", "inputs", "reasoning", "nodes"} {
 			if v, present := row[k]; present {
 				model[k] = v
 			}

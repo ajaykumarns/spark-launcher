@@ -2,6 +2,7 @@ package sparky
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -30,6 +31,12 @@ func (c *Coordinator) LiveCatalog() Object {
 			continue
 		}
 		if str(row["id"]) != "garuda/spark-auto" {
+			name, err := c.resolveInference(ctx, strings.TrimPrefix(str(row["id"]), "garuda/"))
+			if err == nil {
+				if sel, err := c.loadedSelection(name); err == nil && sel.Actual && str(sel.Record["state"]) == StateReady {
+					row["nodes"] = sel.Nodes
+				}
+			}
 			continue
 		}
 		for _, key := range []string{"context_length", "context_window", "output_tokens", "max_output_tokens"} {

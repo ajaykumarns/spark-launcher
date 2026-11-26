@@ -444,7 +444,7 @@ func validateCluster(c Object) error {
 			seen[name] = true
 		}
 	}
-	return nil
+	return validateIdentity(c)
 }
 func enabledLLMs(c Object) []string {
 	out := []string{}

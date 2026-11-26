@@ -1,5 +1,19 @@
 # Cluster profiles
 
+Model IDs stay the same across profiles. If two workload entries run the same
+model with different memory settings, set `public_model` on the alternate entry
+to the canonical workload key. For example, `inkling-2-mini-shared` can set
+`"public_model": "inkling-2-mini"`. Keep the canonical display name independent
+of the device and memory settings.
+
+The catalog exposes one public ID. Inference sends it to the ready runtime in
+that group. Old workload IDs remain valid aliases. Requests do not start a
+stopped runtime. If multiple runtimes in a group are ready, inference reports
+an error instead of choosing an arbitrary target. Profile plans and lifecycle
+records keep their internal workload keys so memory and service ownership stay
+explicit. OpenCode keeps legacy model-map keys for saved sessions, but those
+keys send the canonical API ID.
+
 A cluster profile lists the AI capabilities you want available. Under each
 capability, list its providers and their placements. The catalog in
 `models.json` defines the installed recipes and supported placements.

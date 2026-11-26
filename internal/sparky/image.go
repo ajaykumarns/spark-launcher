@@ -177,19 +177,7 @@ func (c *Coordinator) LLMWire() (Object, error) {
 	if str(cfg["lifecycle"]) != "native" {
 		return c.runtime.legacyManager(ctx, "/v1/models", "GET")
 	}
-	data := []any{}
-	for _, name := range enabledLLMs(cfg) {
-		_, s, nodes, _, err := selectPlacement(cfg, name, "")
-		if err != nil {
-			return nil, err
-		}
-		value := "unloaded"
-		if c.runtime.ready(ctx, name, s, nodes) {
-			value = "loaded"
-		}
-		data = append(data, Object{"id": name, "object": "model", "owned_by": "sparky",
-			"status": Object{"value": value}})
-	}
+	data := c.publicWire()
 	if auto := obj(cfg["auto"]); len(auto) > 0 {
 		value := "unloaded"
 		for _, name := range stringsOf(auto["targets"]) {

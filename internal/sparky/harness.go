@@ -199,6 +199,11 @@ func buildHarnessPlan(cfg clientConfig, catalog Object, model Object, harness, p
 				"toolcall": true, "reasoning": boolean(value(item, "reasoning", false)),
 				"modalities": Object{"input": anyStrings(inputs), "output": anyStrings([]string{"text"})},
 			}
+			// Saved OpenCode sessions refer to model-map keys. Keep legacy
+			// keys valid, but always send the stable public ID to the API.
+			for _, legacy := range stringsOf(item["legacy_ids"]) {
+				models[legacy] = copyObject(models[strings.TrimPrefix(id, prefix)].(map[string]any))
+			}
 		}
 		selected := "spark/" + strings.TrimPrefix(modelID, prefix)
 		raw := Object{

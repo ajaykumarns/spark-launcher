@@ -631,7 +631,7 @@ func (c *Coordinator) llmRequest(ctx context.Context, requested string) (string,
 	if normalized := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(requested)), "garuda/"); normalized == "auto" || normalized == "spark-auto" {
 		name, err = c.resolveAuto(ctx)
 	} else {
-		name, _, err = resolveWorkload(cfg, requested)
+		name, err = c.resolveInference(ctx, requested)
 	}
 	if err != nil {
 		return "", "", err
