@@ -149,3 +149,12 @@ func TestIdentityValidationRejectsInvalidGroups(t *testing.T) {
 		t.Fatal("accepted chat and decision in one group")
 	}
 }
+
+func TestIdentityRefusesAmbiguousReadyRuntimes(t *testing.T) {
+	e := identityEnv(t)
+	identityReady(t, e, "glm")
+	identityReady(t, e, "glm-shared")
+	if _, _, err := e.coord.llmRequest(context.Background(), "garuda/glm"); err == nil || !strings.Contains(err.Error(), "More than one runtime") {
+		t.Fatalf("ambiguous identity must not choose a runtime: %v", err)
+	}
+}
